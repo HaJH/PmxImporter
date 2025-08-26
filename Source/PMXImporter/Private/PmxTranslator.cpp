@@ -340,6 +340,53 @@ void UPmxTranslator::RemoveDoubles(FPmxModel& PmxModel, bool bMeshOnly, TMap<int
                 Index = *NewIdx;
             }
         }
+
+        // Update morph data if not mesh only
+        if (!bMeshOnly)
+        {
+            int32 RemappedVertexMorphs = 0;
+            int32 RemovedVertexMorphs = 0;
+            int32 RemappedUVMorphs = 0;
+            int32 RemovedUVMorphs = 0;
+
+            for (FPmxMorph& Morph : PmxModel.Morphs)
+            {
+                // Vertex morphs
+                for (int32 i = Morph.VertexMorphs.Num() - 1; i >= 0; --i)
+                {
+                    FPmxVertexMorph& VM = Morph.VertexMorphs[i];
+                    if (int32* NewIdx = OutVertexMap.Find(VM.VertexIndex))
+                    {
+                        VM.VertexIndex = *NewIdx;
+                        ++RemappedVertexMorphs;
+                    }
+                    else
+                    {
+                        Morph.VertexMorphs.RemoveAtSwap(i);
+                        ++RemovedVertexMorphs;
+                    }
+                }
+
+                // UV morphs
+                for (int32 i = Morph.UVMorphs.Num() - 1; i >= 0; --i)
+                {
+                    FPmxUVMorph& UM = Morph.UVMorphs[i];
+                    if (int32* NewIdx = OutVertexMap.Find(UM.VertexIndex))
+                    {
+                        UM.VertexIndex = *NewIdx;
+                        ++RemappedUVMorphs;
+                    }
+                    else
+                    {
+                        Morph.UVMorphs.RemoveAtSwap(i);
+                        ++RemovedUVMorphs;
+                    }
+                }
+            }
+
+            UE_LOG(LogPMXImporter, Verbose, TEXT("RemoveDoubles: Remapped %d vertex morphs (%d removed), %d UV morphs (%d removed)"),
+                RemappedVertexMorphs, RemovedVertexMorphs, RemappedUVMorphs, RemovedUVMorphs);
+        }
     }
 }
 
@@ -456,28 +503,10 @@ void UPmxTranslator::ImportArmatureSection(const FPmxModel& PmxModel, UInterchan
 void UPmxTranslator::ImportPhysicsSection(const FPmxModel& PmxModel, UInterchangeBaseNodeContainer& BaseNodeContainer,
     const FString& SkeletonUid, const FString& SkeletalMeshUid) const
 {
-    // Respect user option from SkeletalMesh factory node: CreatePhysicsAsset
-    bool bCreatePhysicsAsset = true;
-    if (!SkeletalMeshUid.IsEmpty())
-    {
-        if (const UInterchangeBaseNode* BaseNode = BaseNodeContainer.GetNode(*SkeletalMeshUid))
-        {
-            if (const UInterchangeSkeletalMeshFactoryNode* SkeletalMeshNode = Cast<UInterchangeSkeletalMeshFactoryNode>(BaseNode))
-            {
-                bool ValueFromNode = true;
-                const bool bHasAttr = SkeletalMeshNode->GetCustomCreatePhysicsAsset(ValueFromNode);
-                if (bHasAttr)
-                {
-                    bCreatePhysicsAsset = ValueFromNode;
-                }
-                else
-                {
-                    // Fall back to translator import option if attribute is missing
-                    bCreatePhysicsAsset = ImportOptions.bImportPhysics;
-                }
-            }
-        }
-    }
+    // Respect translator-level import option only. We intentionally ignore SkeletalMeshFactoryNode's CreatePhysicsAsset
+    // attribute here because we set it to false in ImportMeshSection to disable engine auto-creation.
+    // PhysicsAsset creation is controlled solely by ImportOptions.bImportPhysics and the explicit factory node we spawn here.
+    const bool bCreatePhysicsAsset = ImportOptions.bImportPhysics;
 
     // Always annotate physics nodes (metadata) for potential future use
     const PmxPhysics::FAnnotateResult PhysRes = PmxPhysics::AnnotatePhysicsNodes(PmxModel, BaseNodeContainer);
