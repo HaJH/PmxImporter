@@ -73,3 +73,4 @@ Reimport:
 ## Limitations
 Limitations (current):
 - No VMD import; limited morph types (vertex only), basic material graph, approximate physics.
+- Some Interchange pipeline options are not functional during the import process (e.g., PhysicsAsset Create Flag, Uniform Scale, etc.)
