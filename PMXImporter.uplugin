@@ -1,0 +1,41 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+    "EngineVersion": "5.6.0",
+    "FriendlyName": "PMX Importer",
+	"Description": "Import PMX (MMD) models into Unreal Engine using Interchange.",
+	"Category": "Importers",
+	"CanContainContent": true,
+	"EnabledByDefault": true,
+	"Installed": true,
+	"SupportedTargetPlatforms": [
+		"Win64"
+	],
+	"Modules": [
+		{
+			"Name": "PMXImporter",
+            "Type": "Editor",
+            "LoadingPhase": "PostEngineInit",
+            "PlatformAllowList": [
+                "Win64",
+                "Mac"
+            ]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "Interchange",
+			"Enabled": true
+		},
+        {
+          "Name": "InterchangeEditor",
+          "Enabled": true
+        }
+	],
+	"CreatedBy": "Jeonghyeon Ha",
+	"CreatedByURL": "https://github.com/HaJH",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": ""
+}
