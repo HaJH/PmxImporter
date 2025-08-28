@@ -1,4 +1,6 @@
-﻿#pragma once
+﻿// Copyright (c) 2025 Jeonghyeon Ha. All Rights Reserved. 
+
+#pragma once
 
 #include "CoreMinimal.h"
 #include "HAL/IConsoleManager.h"

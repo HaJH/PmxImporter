@@ -1,4 +1,6 @@
-﻿#include "PmxConsoleVariables.h"
+﻿// Copyright (c) 2025 Jeonghyeon Ha. All Rights Reserved. 
+
+#include "PmxConsoleVariables.h"
 
 namespace PMXImporter
 {
