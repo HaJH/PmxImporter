@@ -27,11 +27,9 @@
 #include "BoneWeights.h"
 #include "InterchangeTranslatorHelper.h"
 #include "Texture/InterchangeTexturePayloadInterface.h"
-#include "PmxPhysicsMapping.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/UObjectGlobals.h"
 #include "InterchangePhysicsAssetFactoryNode.h"
-#include "PmxConsoleVariables.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PmxNodeBuilder.h"
 #include "PmxMaterialMapping.h"
@@ -503,21 +501,6 @@ void UPmxTranslator::ImportArmatureSection(const FPmxModel& PmxModel, UInterchan
 void UPmxTranslator::ImportPhysicsSection(const FPmxModel& PmxModel, UInterchangeBaseNodeContainer& BaseNodeContainer,
     const FString& SkeletonUid, const FString& SkeletalMeshUid) const
 {
-    // Respect translator-level import option only. We intentionally ignore SkeletalMeshFactoryNode's CreatePhysicsAsset
-    // attribute here because we set it to false in ImportMeshSection to disable engine auto-creation.
-    // PhysicsAsset creation is controlled solely by ImportOptions.bImportPhysics and the explicit factory node we spawn here.
-    const bool bCreatePhysicsAsset = ImportOptions.bImportPhysics;
-
-    // Always annotate physics nodes (metadata) for potential future use
-    const PmxPhysics::FAnnotateResult PhysRes = PmxPhysics::AnnotatePhysicsNodes(PmxModel, BaseNodeContainer);
-    UE_LOG(LogPMXImporter, Display, TEXT("Physics annotated -> RigidBodies=%d, Joints=%d"), PhysRes.RigidBodyCount, PhysRes.JointCount);
-
-    if (!bCreatePhysicsAsset)
-    {
-        UE_LOG(LogPMXImporter, Display, TEXT("Skipping PhysicsAsset creation because 'Create Physics Asset' option is OFF."));
-        return;
-    }
-
     // Create PhysicsAsset factory node only if enabled
     UInterchangePhysicsAssetFactoryNode* PhysicsAssetFactoryNode = NewObject<UInterchangePhysicsAssetFactoryNode>(&BaseNodeContainer);
     if (PhysicsAssetFactoryNode)
@@ -593,7 +576,7 @@ TOptional<UE::Interchange::FMeshPayloadData> UPmxTranslator::GetMeshPayloadData(
     PayloadAttributes.GetAttribute(UE::Interchange::FAttributeKey{ UE::Interchange::MeshPayload::Attributes::MeshGlobalTransform }, MeshGlobalTransform);
     
     // Pmx coordinate conversion: Vector().xzy * scale
-    float Baseline = FMath::Max(0.0001f, PMXImporter::CVarPMXImporterScale.GetValueOnAnyThread());
+    float Baseline = 8.f;
     const float ImportScale = Baseline;
     const FTransform MMDToUE = FTransform(
         FQuat(FVector3d::XAxisVector, FMath::DegreesToRadians(90.0f)), // Y-up to Z-up
@@ -674,8 +657,7 @@ TOptional<UE::Interchange::FMeshPayloadData> UPmxTranslator::GetMeshPayloadData(
         const FPmxMorph& Morph = Model.Morphs[MorphIndex];
 
         // Apply vertex offsets : morphed = base + offset, after transform
-        const float MinDelta = PMXImporter::CVarPMXImporterMorphMinDelta.GetValueOnAnyThread();
-        const bool bDropEmpty = PMXImporter::CVarPMXImporterMorphDropEmpty.GetValueOnAnyThread();
+        const float MinDelta = KINDA_SMALL_NUMBER;
         int32 EffectiveChanges = 0;
 
         for (const FPmxVertexMorph& VM : Morph.VertexMorphs)
@@ -699,7 +681,7 @@ TOptional<UE::Interchange::FMeshPayloadData> UPmxTranslator::GetMeshPayloadData(
             VertexPositions[VId] = FVector3f((float)Morphed.X, (float)Morphed.Y, (float)Morphed.Z);
         }
 
-        if (bDropEmpty && EffectiveChanges == 0)
+        if (EffectiveChanges == 0)
         {
             UE_LOG(LogPMXImporter, Verbose, TEXT("Pmx Translator: Dropping empty morph payload '%s' (no effective vertex changes)"), *PayLoadKey.UniqueId);
             return TOptional<FMeshPayloadData>();

@@ -5,7 +5,6 @@
 #include "Nodes/InterchangeBaseNodeContainer.h"
 #include "InterchangeSceneNode.h"
 #include "LogPMXImporter.h"
-#include "PmxConsoleVariables.h"
 #include "HAL/IConsoleManager.h"
 
 // Console variables needed for node building
@@ -68,7 +67,7 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 	TArray<FVector> BonePosUE;
 	BonePosUE.SetNum(PmxModel.Bones.Num());
 	const FQuat RotX = FQuat(FVector3d::XAxisVector, FMath::DegreesToRadians(90.0f));
-	const float ImportScale = FMath::Max(0.0001f, PMXImporter::CVarPMXImporterScale.GetValueOnAnyThread());
+	const float ImportScale = 8.f;
 	const FTransform PMXToUE_X(RotX);
 	const FTransform PMXToUE_Scale(FQuat::Identity, FVector3d::ZeroVector, FVector3d(ImportScale));
 	const FTransform PMXBoneToUE = PMXToUE_X * PMXToUE_Scale;
