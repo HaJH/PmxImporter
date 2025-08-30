@@ -9,13 +9,12 @@ Included :
 - Skeletal Mesh and Skeleton import
 - Vertex Morph import as Morph Targets (UMorphTarget)
 - Basic Materials/Textures: Base Color and Metadata
-- Physics Asset: Basic RigidBody and Joint mapping (Experimental, has some errors)
 - Reimport support
 
 Out of scope :
 - VMD animation import
 - Full support for UV/Material/Bone morphs
-- Advanced physics tuning
+- Physics Asset. RigidBody and Joint mapping
 
 
 ## Requirements
@@ -37,7 +36,6 @@ Option A – Copy into your project:
    - Skeletal Mesh
      - Import Morph Targets: ON
      - Compute Tangents: Engine
-     - Create Physics Asset: ON
    - Materials
      - Create Material Instances: ON
        - Parent material is not supported. The default material of the plug-in will be used.
@@ -51,18 +49,11 @@ Reimport:
 - Vertex Morphs are imported as UMorphTarget.
 
 
-## Physics (Experimental)
-- PMX rigid bodies and joints are approximated:
-  - Shapes: Sphere/Box/Capsule
-  - Constraints: Linear/Angular limits and basic drives
- 
-
 ## Logging & Diagnostics
 - Log category: `LogPMXImporter`, `LogPmxReader`
 
 
 ## Limitations
 Limitations (current):
-- Physics asset creation has some errors about bone visibility states; The error causes packaging to fail.
 - No VMD import; limited morph types (vertex only), basic material graph, approximate physics.
 - Some Interchange pipeline options are not functional during the import process (e.g., PhysicsAsset Create Flag, Uniform Scale, etc.)
