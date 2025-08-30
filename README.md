@@ -1,7 +1,7 @@
 ﻿# PMXImporter for Unreal Engine
 
-PMXImporter is an Interchange-based Translator plugin for Unreal Engine that imports MikuMikuDance PMX models as Skeletal Mesh-centric assets. 
-It focuses on building a robust Interchange node graph and delegates asset creation to Unreal’s factories/pipelines.
+PMXImporter is a plugin for Unreal Engine that imports MikuMikuDance PMX models as Skeletal Mesh-centric assets. 
+It provides Pmx Translator to Unreal's Generic Interchange Factories/Pipelines.
 
 
 ## Features
@@ -9,7 +9,7 @@ Included :
 - Skeletal Mesh and Skeleton import
 - Vertex Morph import as Morph Targets (UMorphTarget)
 - Basic Materials/Textures: Base Color and Metadata
-- Physics Asset: Basic RigidBody and Joint mapping
+- Physics Asset: Basic RigidBody and Joint mapping (Experimental, has some errors)
 - Reimport support
 
 Out of scope :
@@ -28,9 +28,6 @@ Option A – Copy into your project:
 2. Place the `Plugins/PMXImporter` folder into your project’s `Plugins` directory:
    - ProjectRoot\Plugins\PMXImporter
 3. Open the project in Unreal Editor. UE will compile the plugin on first load.
-
-Option B - via Fab:
-1. TODO
 
 
 ## Usage
@@ -54,17 +51,11 @@ Reimport:
 - Vertex Morphs are imported as UMorphTarget.
 
 
-## Physics (Chaos)
+## Physics (Experimental)
 - PMX rigid bodies and joints are approximated:
   - Shapes: Sphere/Box/Capsule
   - Constraints: Linear/Angular limits and basic drives
-
-
-## Data Safety & Parser Notes
-- The PMX reader validates lengths/offsets/indices/endianness.
-- Large data blobs are passed via payload keys to reduce peak memory.
-- On failure: clear error messages and safe termination (no partial state corruption).
-
+ 
 
 ## Logging & Diagnostics
 - Log category: `LogPMXImporter`, `LogPmxReader`
@@ -72,5 +63,6 @@ Reimport:
 
 ## Limitations
 Limitations (current):
+- Physics asset creation has some errors about bone visibility states; The error causes packaging to fail.
 - No VMD import; limited morph types (vertex only), basic material graph, approximate physics.
 - Some Interchange pipeline options are not functional during the import process (e.g., PhysicsAsset Create Flag, Uniform Scale, etc.)
