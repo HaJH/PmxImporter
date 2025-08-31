@@ -27,8 +27,9 @@ Option A – Copy into your project:
    2. Place the `Plugins/PMXImporter` folder into your project’s `Plugins` directory:
       - ProjectRoot\Plugins\PMXImporter
    3. Open the project in Unreal Editor. UE will compile the plugin on first load.
+
 Option B - via Fab
-   https://www.fab.com/ko/listings/d0d45e1b-c8b1-43a5-b0d4-2ac98b183917
+   - https://www.fab.com/ko/listings/d0d45e1b-c8b1-43a5-b0d4-2ac98b183917
    
 
 ## Usage
