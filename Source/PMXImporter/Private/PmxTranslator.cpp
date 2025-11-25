@@ -592,9 +592,10 @@ void UPmxTranslator::ImportArmatureSection(const FPmxModel& PmxModel, UInterchan
     
     // 3) Skeleton factory node
     UInterchangeSkeletonFactoryNode* SkeletonNode = NewObject<UInterchangeSkeletonFactoryNode>(&BaseNodeContainer);
-    const FString BaseName = FPaths::GetBaseFilename(GetSourceData() ? GetSourceData()->GetFilename() : TEXT("PMX"));
-    OutSkeletonUid = FString::Printf(TEXT("/PMX/Skeleton_%s"), *BaseName);
-    SkeletonNode->InitializeSkeletonNode(OutSkeletonUid, TEXT("PMX_Skeleton"), USkeleton::StaticClass()->GetName(), &BaseNodeContainer);
+    const FString ModelName = PmxModel.Header.ModelName.IsEmpty() ? TEXT("PMX") : PmxModel.Header.ModelName;
+    OutSkeletonUid = FString::Printf(TEXT("/PMX/Skeleton_%s"), *ModelName);
+    const FString SkeletonDisplayName = ModelName + TEXT("_Skeleton");
+    SkeletonNode->InitializeSkeletonNode(OutSkeletonUid, *SkeletonDisplayName, USkeleton::StaticClass()->GetName(), &BaseNodeContainer);
     SkeletonNode->SetCustomRootJointUid(OutRootJointUid);
     // Use time zero as bind pose to reduce bind-pose related warnings on import
     SkeletonNode->SetCustomUseTimeZeroForBindPose(true);
@@ -649,16 +650,9 @@ void UPmxTranslator::ImportPhysicsSection(const FPmxModel& PmxModel, UInterchang
     PhysicsCache->MassScale = ImportOptions.PhysicsMassScale;
     PhysicsCache->DampingScale = ImportOptions.PhysicsDampingScale;
 
-    // Store in static cache using filename (without extension) as key for matching with imported mesh name
-    FString CacheKey;
-    if (SourceData)
-    {
-        CacheKey = FPaths::GetBaseFilename(SourceData->GetFilename());
-    }
-    else
-    {
-        CacheKey = ModelName;
-    }
+    // Store in static cache using ModelName as key for matching with imported mesh name
+    // Use ModelName (not filename) to ensure consistency with SkeletalMesh->GetName() in pipeline
+    const FString CacheKey = ModelName;
     PhysicsPayloadCache.Add(CacheKey, PhysicsCache);
 
     UE_LOG(LogPMXImporter, Display, TEXT("Cached %d rigid bodies and %d joints for post-import processing (key: %s)"),

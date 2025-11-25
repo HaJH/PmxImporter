@@ -80,20 +80,66 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 
 	// We will use the created Joint Root as the skeleton root
 	const FString JointRootUid = RootJointUid;
-	
-	// Create joint nodes for each bone
+
+	// DIAGNOSTIC: Check for duplicate bone names and parent relationships
+	{
+		TMap<FString, TArray<int32>> BoneNameMap;
+		for (int32 i = 0; i < PmxModel.Bones.Num(); ++i)
+		{
+			BoneNameMap.FindOrAdd(PmxModel.Bones[i].Name).Add(i);
+		}
+
+		int32 DuplicateCount = 0;
+		for (const auto& Pair : BoneNameMap)
+		{
+			if (Pair.Value.Num() > 1)
+			{
+				FString Indices;
+				for (int32 Idx : Pair.Value)
+				{
+					if (!Indices.IsEmpty()) Indices += TEXT(", ");
+					Indices += FString::FromInt(Idx);
+				}
+				UE_LOG(LogPMXImporter, Warning, TEXT("PMX NodeBuilder: Duplicate bone name '%s' at indices [%s]"),
+					*Pair.Key, *Indices);
+				++DuplicateCount;
+			}
+		}
+
+		if (DuplicateCount > 0)
+		{
+			UE_LOG(LogPMXImporter, Warning, TEXT("PMX NodeBuilder: Found %d duplicate bone names"), DuplicateCount);
+		}
+
+		// Log first 10 bones and their parent relationships
+		UE_LOG(LogPMXImporter, Display, TEXT("=== PMX Bone Parent Relationships (first 10) ==="));
+		for (int32 i = 0; i < FMath::Min(10, PmxModel.Bones.Num()); ++i)
+		{
+			const FPmxBone& Bone = PmxModel.Bones[i];
+			FString ParentName = TEXT("(Root)");
+			if (Bone.ParentBoneIndex >= 0 && Bone.ParentBoneIndex < PmxModel.Bones.Num())
+			{
+				ParentName = PmxModel.Bones[Bone.ParentBoneIndex].Name;
+			}
+			UE_LOG(LogPMXImporter, Display, TEXT("  PMX[%d] '%s' -> Parent: [%d] '%s'"),
+				i, *Bone.Name, Bone.ParentBoneIndex, *ParentName);
+		}
+	}
+
+	// Two-pass bone creation to handle forward references in ParentBoneIndex
+	// Pass 1: Create all joint nodes first
 	for (int32 BoneIndex = 0; BoneIndex < PmxModel.Bones.Num(); ++BoneIndex)
 	{
 		const FPmxBone& Bone = PmxModel.Bones[BoneIndex];
-		
+
 		UInterchangeSceneNode* JointNode = NewObject<UInterchangeSceneNode>(&BaseNodeContainer);
 		const FString JointUid = FString::Printf(TEXT("%s/Bone_%d"), *JointsPrefix, BoneIndex);
 		FString BoneName = Bone.Name.IsEmpty() ? FString::Printf(TEXT("Bone_%d"), BoneIndex) : Bone.Name;
-		
+
 		JointNode->InitializeNode(JointUid, *BoneName, ContainerType::TranslatedScene);
 		// Mark as Joint specialized type
 		JointNode->AddSpecializedType(UE::Interchange::FSceneNodeStaticData::GetJointSpecializeTypeString());
-		
+
 		// Set local transform (bone position relative to parent, in UE space)
 		FVector LocalPos = BonePosUE[BoneIndex];
 		if (Bone.ParentBoneIndex >= 0 && Bone.ParentBoneIndex < PmxModel.Bones.Num())
@@ -116,16 +162,30 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 		FTransform LocalTransform = FTransform::Identity;
 		LocalTransform.SetLocation(LocalPos);
 		JointNode->SetCustomLocalTransform(&BaseNodeContainer, LocalTransform);
-		
+
 		BaseNodeContainer.AddNode(JointNode);
 		OutBoneIndexToJointNode.Add(BoneIndex, JointNode);
-		
+	}
+
+	// Pass 2: Set parent relationships now that all nodes exist
+	for (int32 BoneIndex = 0; BoneIndex < PmxModel.Bones.Num(); ++BoneIndex)
+	{
+		const FPmxBone& Bone = PmxModel.Bones[BoneIndex];
+		UInterchangeSceneNode* JointNode = OutBoneIndexToJointNode[BoneIndex];
+
 		// Set parent relationship
 		if (Bone.ParentBoneIndex >= 0 && Bone.ParentBoneIndex < PmxModel.Bones.Num())
 		{
 			if (UInterchangeSceneNode** ParentJoint = OutBoneIndexToJointNode.Find(Bone.ParentBoneIndex))
 			{
 				BaseNodeContainer.SetNodeParentUid(JointNode->GetUniqueID(), (*ParentJoint)->GetUniqueID());
+			}
+			else
+			{
+				// Fallback: Parent to Joint Root if parent not found
+				UE_LOG(LogPMXImporter, Warning, TEXT("PMX NodeBuilder: Bone '%s' (Index %d) has invalid parent index %d, parenting to root"),
+					*Bone.Name, BoneIndex, Bone.ParentBoneIndex);
+				BaseNodeContainer.SetNodeParentUid(JointNode->GetUniqueID(), JointRootUid);
 			}
 		}
 		else
