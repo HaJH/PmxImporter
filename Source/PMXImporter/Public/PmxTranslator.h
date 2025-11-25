@@ -102,6 +102,9 @@ struct FPmxImportOptions
 
     UPROPERTY()
     float PhysicsDampingScale = 1.0f;
+
+    UPROPERTY()
+    float PhysicsShapeScale = 0.5f;
 };
 
 // Cache structure for PMX physics data (used in post-import)
@@ -115,6 +118,7 @@ struct FPmxPhysicsCache
     EPmxPhysicsType2Handling Type2Mode = EPmxPhysicsType2Handling::ConvertToKinematic;
     float MassScale = 1.0f;
     float DampingScale = 1.0f;
+    float ShapeScale = 0.5f;
 };
 
 UCLASS()

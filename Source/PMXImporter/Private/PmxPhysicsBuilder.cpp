@@ -114,7 +114,7 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 
 		if (!BodyAPtr || !BodyBPtr)
 		{
-			UE_LOG(LogPMXImporter, Warning,
+			UE_LOG(LogPMXImporter, Log,
 				TEXT("Skipping Joint '%s': One or both bodies not found (A=%d, B=%d)"),
 				*Joint.Name, Joint.RigidBodyIndexA, Joint.RigidBodyIndexB);
 			continue;
@@ -167,7 +167,7 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 
 	if (BoneIndex == INDEX_NONE)
 	{
-		UE_LOG(LogPMXImporter, Warning,
+		UE_LOG(LogPMXImporter, Log,
 			TEXT("CreateBodySetup: Bone '%s' not found in skeleton for RigidBody '%s'"),
 			*Bone.Name, *RB.Name);
 		return nullptr;
@@ -191,7 +191,7 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 
 	if (ExistingBodyIndex != INDEX_NONE)
 	{
-		UE_LOG(LogPMXImporter, Warning,
+		UE_LOG(LogPMXImporter, Log,
 			TEXT("CreateBodySetup: BodySetup already exists for bone '%s' (index %d), skipping RigidBody '%s'"),
 			*ActualBoneName.ToString(), ExistingBodyIndex, *RB.Name);
 		return nullptr;
@@ -250,22 +250,23 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 
 	// Create shape based on type
 	FKAggregateGeom& AggGeom = BodySetup->AggGeom;
+	const float EffectiveScale = PhysicsData.Scale * PhysicsData.ShapeScale;
 	switch (RB.Shape)
 	{
 	case 0: // Sphere
-		SetupSphereShape(AggGeom, RB, PhysicsData.Scale);
+		SetupSphereShape(AggGeom, RB, EffectiveScale);
 		break;
 	case 1: // Box
-		SetupBoxShape(AggGeom, RB, PhysicsData.Scale);
+		SetupBoxShape(AggGeom, RB, EffectiveScale);
 		break;
 	case 2: // Capsule
-		SetupCapsuleShape(AggGeom, RB, PhysicsData.Scale);
+		SetupCapsuleShape(AggGeom, RB, EffectiveScale);
 		break;
 	default:
 		UE_LOG(LogPMXImporter, Warning,
 			TEXT("CreateBodySetup: Unknown shape type %d for RigidBody '%s', using sphere"),
 			RB.Shape, *RB.Name);
-		SetupSphereShape(AggGeom, RB, PhysicsData.Scale);
+		SetupSphereShape(AggGeom, RB, EffectiveScale);
 		break;
 	}
 
@@ -474,12 +475,23 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 		CI.ProfileInstance.AngularDrive.SlerpDrive.Stiffness = AvgSpringRot;
 	}
 
-	// Set joint position (relative to parent body)
-	const FVector JointPos = ConvertVectorPmxToUE(Joint.Position, PhysicsData.Scale);
+	// Convert joint position from world to bone-local coordinates
+	// PMX Joint.Position is in world space, but UE constraint frames need bone-local coordinates
+	const FVector JointWorldPos = ConvertVectorPmxToUE(Joint.Position, PhysicsData.Scale);
 	const FRotator JointRot = ConvertRotationPmxToUE(Joint.Rotation);
 
-	CI.SetRefPosition(EConstraintFrame::Frame1, JointPos);
-	CI.SetRefPosition(EConstraintFrame::Frame2, JointPos);
+	// Get bone positions for both bodies
+	const FPmxBone& BoneA = Bones[RBA.RelatedBoneIndex];
+	const FPmxBone& BoneB = Bones[RBB.RelatedBoneIndex];
+	const FVector BonePosA = ConvertVectorPmxToUE(BoneA.Position, PhysicsData.Scale);
+	const FVector BonePosB = ConvertVectorPmxToUE(BoneB.Position, PhysicsData.Scale);
+
+	// Calculate bone-local positions for each constraint frame
+	const FVector JointLocalPosA = JointWorldPos - BonePosA;
+	const FVector JointLocalPosB = JointWorldPos - BonePosB;
+
+	CI.SetRefPosition(EConstraintFrame::Frame1, JointLocalPosA);
+	CI.SetRefPosition(EConstraintFrame::Frame2, JointLocalPosB);
 
 	// UE 5.7: SetRefOrientation requires PriAxis and SecAxis vectors
 	const FQuat JointQuat = JointRot.Quaternion().GetNormalized();

@@ -151,6 +151,10 @@ bool UPmxTranslator::Translate(UInterchangeBaseNodeContainer& BaseNodeContainer)
         {
             ImportOptions.PhysicsDampingScale = FloatValue;
         }
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:PhysicsShapeScale"), FloatValue))
+        {
+            ImportOptions.PhysicsShapeScale = FloatValue;
+        }
 
         // Material options
         if (SourceNode->GetBooleanAttribute(TEXT("PMX:UseMipmap"), bValue))
@@ -647,6 +651,7 @@ void UPmxTranslator::ImportPhysicsSection(const FPmxModel& PmxModel, UInterchang
     PhysicsCache->Type2Mode = ImportOptions.PhysicsType2Mode;
     PhysicsCache->MassScale = ImportOptions.PhysicsMassScale;
     PhysicsCache->DampingScale = ImportOptions.PhysicsDampingScale;
+    PhysicsCache->ShapeScale = ImportOptions.PhysicsShapeScale;
 
     // Store in static cache using ModelName as key for matching with imported mesh name
     // Use ModelName (not filename) to ensure consistency with SkeletalMesh->GetName() in pipeline
@@ -1022,7 +1027,7 @@ TOptional<UE::Interchange::FImportImage> UPmxTranslator::GetTexturePayloadData(c
     }
 
     // 3) Fallback: create a small dummy image to avoid factory error and keep import stable
-    UE_LOG(LogPMXImporter, Warning, TEXT("Pmx Translator: No texture translator for '%s'. Using 4x4 BGRA8 dummy texture."), *PayloadKey);
+    UE_LOG(LogPMXImporter, Log, TEXT("Pmx Translator: No texture translator for '%s'. Using 4x4 BGRA8 dummy texture."), *PayloadKey);
     UE::Interchange::FImportImage Dummy;
     // Use BGRA8 (uncompressed 4 channels) so downstream factories can build mips without warnings
     Dummy.Init2DWithParams(4, 4, TSF_BGRA8, /*bSRGB*/ true, /*bUseGamma*/ true);

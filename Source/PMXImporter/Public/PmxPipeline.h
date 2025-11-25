@@ -104,6 +104,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.0", ClampMax = "10.0"))
 	float PhysicsDampingScale = 1.0f;
 
+	/** Scale factor for physics body shapes (sphere, box, capsule radius/size) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
+	float PhysicsShapeScale = 0.5f;
+
 	// =============================================
 	// Material Category
 	// =============================================

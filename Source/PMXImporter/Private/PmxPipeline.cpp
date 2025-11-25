@@ -47,6 +47,7 @@ namespace PmxPipelineAttributeKeys
 	const FString PhysicsType2Mode = TEXT("PMX:PhysicsType2Mode");
 	const FString PhysicsMassScale = TEXT("PMX:PhysicsMassScale");
 	const FString PhysicsDampingScale = TEXT("PMX:PhysicsDampingScale");
+	const FString PhysicsShapeScale = TEXT("PMX:PhysicsShapeScale");
 	const FString MarkSharpEdges = TEXT("PMX:MarkSharpEdges");
 	const FString SharpEdgeAngle = TEXT("PMX:SharpEdgeAngle");
 	const FString ImportAddUV2AsVertexColors = TEXT("PMX:ImportAddUV2AsVertexColors");
@@ -122,6 +123,7 @@ void UPmxPipeline::StoreOptionsToSourceNode(UInterchangeBaseNodeContainer* BaseN
 	SourceNode->AddStringAttribute(PmxPipelineAttributeKeys::PhysicsType2Mode, FString::FromInt(static_cast<int32>(PhysicsType2Mode)));
 	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsMassScale, PhysicsMassScale);
 	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsDampingScale, PhysicsDampingScale);
+	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsShapeScale, PhysicsShapeScale);
 
 	// Material options
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::UseMipmap, bUseMipmap);
@@ -566,12 +568,24 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 
 		if (FoundCache && FoundCache->IsValid())
 		{
-			// Log skeleton state before physics asset creation
+			// Set the preview skeletal mesh BEFORE building physics asset
+			// This is critical for proper bone name resolution
+			PhysicsAsset->SetPreviewMesh(SkeletalMesh, false);
+
 			// Build physics asset from PMX data
 			BuildPmxPhysicsAsset(PhysicsAsset, SkeletalMesh, **FoundCache);
 
 			// Link physics asset to skeletal mesh
 			SkeletalMesh->SetPhysicsAsset(PhysicsAsset);
+
+			// Post-processing: Refresh physics asset to update all dependent components
+			#if WITH_EDITOR
+			PhysicsAsset->RefreshPhysicsAssetChange();
+			#endif
+
+			// Mark assets as dirty so they get saved
+			PhysicsAsset->MarkPackageDirty();
+			SkeletalMesh->MarkPackageDirty();
 
 			// Remove from cache after use
 			UPmxTranslator::PhysicsPayloadCache.Remove(MeshName);
@@ -580,7 +594,7 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 		}
 		else
 		{
-			UE_LOG(LogPMXImporter, Warning, TEXT("UPmxPipeline: No PMX physics cache found for '%s'"), *MeshName);
+			UE_LOG(LogPMXImporter, Log, TEXT("UPmxPipeline: No PMX physics cache found for '%s'"), *MeshName);
 		}
 	}
 }
