@@ -90,7 +90,7 @@ class PMXIMPORTER_API UPmxTranslator : public UInterchangeTranslatorBase, public
 public:
     virtual TArray<FString> GetSupportedFormats() const override
     {
-        return { TEXT("pmx") };
+        return { TEXT("pmx;MikuMikuDance Model") };
     }
 
     virtual EInterchangeTranslatorType GetTranslatorType() const override
