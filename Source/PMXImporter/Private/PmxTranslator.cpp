@@ -19,6 +19,7 @@
 #include "InterchangeTexture2DNode.h"
 #include "PmxStructs.h"
 #include "PmxReader.h"
+#include "PmxUtils.h"
 #include "Misc/FileHelper.h"
 #include "Mesh/InterchangeMeshPayload.h"
 #include "Types/AttributeStorage.h"
@@ -706,35 +707,15 @@ TOptional<UE::Interchange::FMeshPayloadData> UPmxTranslator::GetMeshPayloadData(
     // Fill JointNames including synthetic Root bone (must match SkeletalMesh bone structure)
     // SkeletalMesh has Root at index 0, then PMX bones at indices 1..N
     // Skin weights must use these adjusted indices
-    Data.JointNames.Reset(Model.Bones.Num() + 1);  // +1 for Root
-    Data.JointNames.Reserve(Model.Bones.Num() + 1);
-    Data.JointNames.Add(TEXT("Root"));  // Index 0: synthetic Root bone
-    for (int32 BoneIndex = 0; BoneIndex < Model.Bones.Num(); ++BoneIndex)
-    {
-        const FPmxBone& Bone = Model.Bones[BoneIndex];
-        const FString BoneName = Bone.Name.IsEmpty() ? FString::Printf(TEXT("Bone_%d"), BoneIndex) : Bone.Name;
-        Data.JointNames.Add(BoneName);  // PMX bone indices are now offset by +1
-    }
+    // IMPORTANT: Use BuildUniqueBoneNames to ensure consistency with PmxNodeBuilder
+    TArray<FString> UniqueBoneNames = FPmxUtils::BuildUniqueBoneNames(Model);
 
-    // JointNames 중복 검사 (경고만 출력)
-    TSet<FString> UniqueJointNames;
-    int32 DuplicateCount = 0;
-    for (int32 i = 0; i < Data.JointNames.Num(); ++i)
+    Data.JointNames.Reset(UniqueBoneNames.Num() + 1);  // +1 for Root
+    Data.JointNames.Reserve(UniqueBoneNames.Num() + 1);
+    Data.JointNames.Add(TEXT("Root"));  // Index 0: synthetic Root bone
+    for (const FString& BoneName : UniqueBoneNames)
     {
-        bool bAlreadyExists = false;
-        UniqueJointNames.Add(Data.JointNames[i], &bAlreadyExists);
-        if (bAlreadyExists)
-        {
-            UE_LOG(LogPMXImporter, Warning,
-                TEXT("Duplicate JointName at index %d: '%s'"),
-                i, *Data.JointNames[i]);
-            ++DuplicateCount;
-        }
-    }
-    if (DuplicateCount > 0)
-    {
-        UE_LOG(LogPMXImporter, Warning, TEXT("Found %d duplicate JointNames in mesh payload"),
-            DuplicateCount);
+        Data.JointNames.Add(BoneName);  // PMX bone indices are now offset by +1
     }
 
     // Create vertices and set positions (apply optional mesh global transform if provided)
@@ -791,84 +772,6 @@ TOptional<UE::Interchange::FMeshPayloadData> UPmxTranslator::GetMeshPayloadData(
             {
                 VertexSkinWeights.Set(VId, MakeArrayView<const UE::AnimationCore::FBoneWeight>(BWArray.GetData(), BWArray.Num()), Settings);
             }
-        }
-    }
-
-    // === DIAGNOSTIC: Skin Weight Statistics ===
-    if (PayLoadKey.Type != EInterchangeMeshPayLoadType::MORPHTARGET)
-    {
-        int32 MaxPmxBoneIndex = -1;
-        int32 MinPmxBoneIndex = INT_MAX;
-        TSet<int32> UsedPmxBoneIndices;
-
-        for (int32 vid = 0; vid < Model.Vertices.Num(); ++vid)
-        {
-            const auto& V = Model.Vertices[vid];
-            const int32 PairCount = FMath::Min(V.BoneIndices.Num(), V.BoneWeights.Num());
-            for (int32 i = 0; i < PairCount; ++i)
-            {
-                const int32 PmxBoneIndex = V.BoneIndices[i];
-                const float Weight = V.BoneWeights[i];
-                if (PmxBoneIndex >= 0 && Weight > 0.0f)
-                {
-                    UsedPmxBoneIndices.Add(PmxBoneIndex);
-                    MaxPmxBoneIndex = FMath::Max(MaxPmxBoneIndex, PmxBoneIndex);
-                    MinPmxBoneIndex = FMath::Min(MinPmxBoneIndex, PmxBoneIndex);
-                }
-            }
-        }
-
-        UE_LOG(LogPMXImporter, Display, TEXT("=== DIAGNOSTIC: Skin Weight Statistics ==="));
-        UE_LOG(LogPMXImporter, Display, TEXT("  JointNames count: %d (Root + %d PMX bones)"), Data.JointNames.Num(), Model.Bones.Num());
-        UE_LOG(LogPMXImporter, Display, TEXT("  PMX bone indices used: min=%d, max=%d, unique=%d"),
-            MinPmxBoneIndex, MaxPmxBoneIndex, UsedPmxBoneIndices.Num());
-        UE_LOG(LogPMXImporter, Display, TEXT("  Adjusted indices (after +1 offset): min=%d, max=%d"),
-            MinPmxBoneIndex + 1, MaxPmxBoneIndex + 1);
-
-        // Log JointNames sample (first 5, last 5, and sample at max used index)
-        UE_LOG(LogPMXImporter, Display, TEXT("=== JointNames Sample ==="));
-        for (int32 i = 0; i < FMath::Min(5, Data.JointNames.Num()); ++i)
-        {
-            UE_LOG(LogPMXImporter, Display, TEXT("  JointNames[%d]: '%s'"), i, *Data.JointNames[i]);
-        }
-        if (Data.JointNames.Num() > 10)
-        {
-            UE_LOG(LogPMXImporter, Display, TEXT("  ..."));
-            for (int32 i = Data.JointNames.Num() - 5; i < Data.JointNames.Num(); ++i)
-            {
-                UE_LOG(LogPMXImporter, Display, TEXT("  JointNames[%d]: '%s'"), i, *Data.JointNames[i]);
-            }
-        }
-        // Log the JointName at max used skin weight index
-        const int32 MaxAdjustedIdx = MaxPmxBoneIndex + 1;
-        if (MaxAdjustedIdx >= 0 && MaxAdjustedIdx < Data.JointNames.Num())
-        {
-            UE_LOG(LogPMXImporter, Display, TEXT("  JointNames[%d] (max used): '%s'"), MaxAdjustedIdx, *Data.JointNames[MaxAdjustedIdx]);
-        }
-
-        // Check for out-of-range adjusted indices
-        int32 OutOfRangeCount = 0;
-        for (int32 PmxBoneIdx : UsedPmxBoneIndices)
-        {
-            const int32 AdjustedIdx = PmxBoneIdx + 1;  // +1 for Root offset
-            if (AdjustedIdx >= Data.JointNames.Num())
-            {
-                ++OutOfRangeCount;
-                if (OutOfRangeCount <= 5)
-                {
-                    UE_LOG(LogPMXImporter, Error,
-                        TEXT("  OUT OF RANGE: PMX bone %d -> adjusted %d (JointNames max: %d)"),
-                        PmxBoneIdx, AdjustedIdx, Data.JointNames.Num() - 1);
-                }
-            }
-        }
-        if (OutOfRangeCount > 0)
-        {
-            UE_LOG(LogPMXImporter, Error, TEXT("  Total out-of-range bone indices: %d"), OutOfRangeCount);
-        }
-        else
-        {
-            UE_LOG(LogPMXImporter, Display, TEXT("  All adjusted bone indices are within JointNames range"));
         }
     }
 
@@ -1192,14 +1095,18 @@ void UPmxTranslator::FixRepeatedMorphNames(FPmxModel& PmxModel) const
     for (FPmxMorph& Morph : PmxModel.Morphs)
     {
         FString OriginalName = Morph.Name.IsEmpty() ? TEXT("Morph") : Morph.Name;
+
+        // Sanitize morph name to remove problematic characters while preserving Unicode
+        OriginalName = FPmxUtils::SanitizePackagePath(OriginalName);
+
         FString UniqueName = OriginalName;
-        
+
         int32 Counter = 1;
         while (UsedNames.Contains(UniqueName))
         {
             UniqueName = FString::Printf(TEXT("%s_%d"), *OriginalName, Counter++);
         }
-        
+
         Morph.Name = UniqueName;
         UsedNames.Add(UniqueName);
     }
@@ -1245,15 +1152,36 @@ void UPmxTranslator::ImportTextures(const FPmxModel& PmxModel, const FString& Pm
             continue;
         }
         
-        // Create texture node (sanitize name: remove extension and unsafe chars)
-        FString TexBaseName = FPaths::GetBaseFilename(PmxTex.TexturePath);
-        TexBaseName = SafeObjectName(TexBaseName, 64);
-        const FString TexNodePath = FString::Printf(TEXT("/PMX/Textures/MMD_%s_%d"), *TexBaseName, TexIdx);
+        // Create texture node (preserve relative path structure to avoid name collisions)
+        FString RelativePath = PmxTex.TexturePath;
+        RelativePath.ReplaceInline(TEXT("\\"), TEXT("/")); // Normalize path separators
+
+        FString TexDir = FPaths::GetPath(RelativePath); // e.g., "Tex" or "Sph"
+        FString TexBaseName = FPaths::GetBaseFilename(RelativePath);
+        TexBaseName = FPmxUtils::SanitizePackagePath(TexBaseName);
+
+        FString TexNodePath;
+        if (!TexDir.IsEmpty())
+        {
+            // Preserve directory structure: Tex/1.png -> /PMX/Textures/Tex/MMD_1_0
+            // Sanitize directory name (replace slashes and special chars)
+            FString SafeDir = FPmxUtils::SanitizePackagePath(TexDir.Replace(TEXT("/"), TEXT("_")));
+            TexNodePath = FString::Printf(TEXT("/PMX/Textures/%s/MMD_%s_%d"), *SafeDir, *TexBaseName, TexIdx);
+        }
+        else
+        {
+            // Flat structure for root-level textures
+            TexNodePath = FString::Printf(TEXT("/PMX/Textures/MMD_%s_%d"), *TexBaseName, TexIdx);
+        }
         UInterchangeTexture2DNode* Texture2DNode = UInterchangeTexture2DNode::Create(&BaseNodeContainer, *TexNodePath);
         
         if (Texture2DNode)
         {
-            Texture2DNode->SetDisplayLabel(TexBaseName);
+            // Display label includes directory for clarity (e.g., "Tex/1" or "Sph/1")
+            FString DisplayLabel = !TexDir.IsEmpty()
+                ? FString::Printf(TEXT("%s/%s"), *TexDir, *TexBaseName)
+                : TexBaseName;
+            Texture2DNode->SetDisplayLabel(DisplayLabel);
             // Resolve texture path
             FString AbsPath = FPaths::IsRelative(PmxTex.TexturePath) 
                 ? FPaths::ConvertRelativePathToFull(FPaths::Combine(PmxBaseDir, PmxTex.TexturePath))

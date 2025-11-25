@@ -35,41 +35,10 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 	UE_LOG(LogPMXImporter, Display, TEXT("BuildPhysicsAsset: SkeletalMesh has %d bones, PMX has %d bones"),
 		RefSkel.GetNum(), PhysicsData.Bones.Num());
 
-	// === DIAGNOSTIC: SkeletalMesh Bones (first 10, last 10) ===
-	UE_LOG(LogPMXImporter, Display, TEXT("=== SkeletalMesh Bones (first 10, last 10) ==="));
-	for (int32 i = 0; i < FMath::Min(10, RefSkel.GetNum()); ++i)
-	{
-		UE_LOG(LogPMXImporter, Display, TEXT("  SK[%d]: '%s'"), i, *RefSkel.GetBoneName(i).ToString());
-	}
-	if (RefSkel.GetNum() > 20)
-	{
-		UE_LOG(LogPMXImporter, Display, TEXT("  ... (total %d bones) ..."), RefSkel.GetNum());
-		for (int32 i = RefSkel.GetNum() - 10; i < RefSkel.GetNum(); ++i)
-		{
-			UE_LOG(LogPMXImporter, Display, TEXT("  SK[%d]: '%s'"), i, *RefSkel.GetBoneName(i).ToString());
-		}
-	}
-
-	// === DIAGNOSTIC: PMX Bones (first 10, last 10) ===
-	UE_LOG(LogPMXImporter, Display, TEXT("=== PMX Bones (first 10, last 10) ==="));
-	for (int32 i = 0; i < FMath::Min(10, PhysicsData.Bones.Num()); ++i)
-	{
-		UE_LOG(LogPMXImporter, Display, TEXT("  PMX[%d]: '%s'"), i, *PhysicsData.Bones[i].Name);
-	}
-	if (PhysicsData.Bones.Num() > 20)
-	{
-		UE_LOG(LogPMXImporter, Display, TEXT("  ... (total %d bones) ..."), PhysicsData.Bones.Num());
-		for (int32 i = PhysicsData.Bones.Num() - 10; i < PhysicsData.Bones.Num(); ++i)
-		{
-			UE_LOG(LogPMXImporter, Display, TEXT("  PMX[%d]: '%s'"), i, *PhysicsData.Bones[i].Name);
-		}
-	}
-
 	UE_LOG(LogPMXImporter, Display, TEXT("Building PhysicsAsset with %d rigid bodies and %d joints"),
 		PhysicsData.RigidBodies.Num(), PhysicsData.Joints.Num());
 
-	// === DIAGNOSTIC: RigidBody -> Bone Mapping ===
-	UE_LOG(LogPMXImporter, Display, TEXT("=== RigidBody -> Bone Mapping ==="));
+	// Validate RigidBody -> Bone Mapping
 	int32 InvalidRBBoneRefs = 0;
 	for (int32 i = 0; i < PhysicsData.RigidBodies.Num(); ++i)
 	{
@@ -77,9 +46,6 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 		if (RBCheck.RelatedBoneIndex < 0 || RBCheck.RelatedBoneIndex >= PhysicsData.Bones.Num())
 		{
 			++InvalidRBBoneRefs;
-			UE_LOG(LogPMXImporter, Warning,
-				TEXT("  RB[%d] '%s': Invalid bone index %d (PMX bones: %d)"),
-				i, *RBCheck.Name, RBCheck.RelatedBoneIndex, PhysicsData.Bones.Num());
 		}
 	}
 	UE_LOG(LogPMXImporter, Display, TEXT("  Total RigidBodies: %d, Invalid bone refs: %d"),
@@ -168,64 +134,6 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 	// Final update
 	PhysicsAsset->UpdateBodySetupIndexMap();
 
-	// === DIAGNOSTIC: PhysicsAsset Bone Index Validation ===
-	UE_LOG(LogPMXImporter, Display, TEXT("=== DIAGNOSTIC: PhysicsAsset Bone Index Validation ==="));
-	UE_LOG(LogPMXImporter, Display, TEXT("  SkeletalMesh bone count: %d"), RefSkel.GetNum());
-	UE_LOG(LogPMXImporter, Display, TEXT("  BodySetups count: %d"), PhysicsAsset->SkeletalBodySetups.Num());
-
-	int32 InvalidBoneCount = 0;
-	int32 OutOfRangeBoneCount = 0;
-
-	for (int32 i = 0; i < PhysicsAsset->SkeletalBodySetups.Num(); ++i)
-	{
-		USkeletalBodySetup* BS = PhysicsAsset->SkeletalBodySetups[i];
-		if (!BS) continue;
-
-		int32 FoundIdx = RefSkel.FindBoneIndex(BS->BoneName);
-
-		if (FoundIdx == INDEX_NONE)
-		{
-			++InvalidBoneCount;
-			UE_LOG(LogPMXImporter, Error,
-				TEXT("  BodySetup[%d]: BoneName='%s' NOT FOUND in skeleton"),
-				i, *BS->BoneName.ToString());
-		}
-		else if (FoundIdx >= RefSkel.GetNum())
-		{
-			++OutOfRangeBoneCount;
-			UE_LOG(LogPMXImporter, Error,
-				TEXT("  BodySetup[%d]: BoneName='%s' has OUT OF RANGE index %d (max: %d)"),
-				i, *BS->BoneName.ToString(), FoundIdx, RefSkel.GetNum() - 1);
-		}
-	}
-
-	UE_LOG(LogPMXImporter, Display,
-		TEXT("  Invalid bones: %d, Out of range: %d"), InvalidBoneCount, OutOfRangeBoneCount);
-
-	// Log first 20 and last 10 BodySetup BoneNames
-	UE_LOG(LogPMXImporter, Display, TEXT("=== First 20 BodySetup BoneNames ==="));
-	for (int32 i = 0; i < FMath::Min(20, PhysicsAsset->SkeletalBodySetups.Num()); ++i)
-	{
-		USkeletalBodySetup* BS = PhysicsAsset->SkeletalBodySetups[i];
-		if (!BS) continue;
-		int32 Idx = RefSkel.FindBoneIndex(BS->BoneName);
-		UE_LOG(LogPMXImporter, Display, TEXT("  [%d] '%s' -> idx %d"),
-			i, *BS->BoneName.ToString(), Idx);
-	}
-
-	if (PhysicsAsset->SkeletalBodySetups.Num() > 30)
-	{
-		UE_LOG(LogPMXImporter, Display, TEXT("=== Last 10 BodySetup BoneNames ==="));
-		for (int32 i = PhysicsAsset->SkeletalBodySetups.Num() - 10; i < PhysicsAsset->SkeletalBodySetups.Num(); ++i)
-		{
-			USkeletalBodySetup* BS = PhysicsAsset->SkeletalBodySetups[i];
-			if (!BS) continue;
-			int32 Idx = RefSkel.FindBoneIndex(BS->BoneName);
-			UE_LOG(LogPMXImporter, Display, TEXT("  [%d] '%s' -> idx %d"),
-				i, *BS->BoneName.ToString(), Idx);
-		}
-	}
-
 	return CreatedBodies > 0;
 }
 
@@ -269,11 +177,23 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 	ActualBoneName = RefSkel.GetBoneName(BoneIndex);
 
 	// Check if body already exists for this bone
-	if (Asset->FindBodyIndex(ActualBoneName) != INDEX_NONE)
+	// NOTE: We cannot use Asset->FindBodyIndex() because BodySetupIndexMap is not updated
+	// during construction. We must manually search the SkeletalBodySetups array.
+	int32 ExistingBodyIndex = INDEX_NONE;
+	for (int32 i = 0; i < Asset->SkeletalBodySetups.Num(); ++i)
 	{
-		UE_LOG(LogPMXImporter, Verbose,
-			TEXT("CreateBodySetup: BodySetup already exists for bone '%s', skipping"),
-			*ActualBoneName.ToString());
+		if (Asset->SkeletalBodySetups[i] && Asset->SkeletalBodySetups[i]->BoneName == ActualBoneName)
+		{
+			ExistingBodyIndex = i;
+			break;
+		}
+	}
+
+	if (ExistingBodyIndex != INDEX_NONE)
+	{
+		UE_LOG(LogPMXImporter, Warning,
+			TEXT("CreateBodySetup: BodySetup already exists for bone '%s' (index %d), skipping RigidBody '%s'"),
+			*ActualBoneName.ToString(), ExistingBodyIndex, *RB.Name);
 		return nullptr;
 	}
 
@@ -369,9 +289,10 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 	// Add to physics asset
 	Asset->SkeletalBodySetups.Add(BodySetup);
 
+	const int32 NewBodySetupCount = Asset->SkeletalBodySetups.Num();
 	UE_LOG(LogPMXImporter, Verbose,
-		TEXT("Created BodySetup for bone '%s' (RB: '%s', Shape: %d, PhysType: %d)"),
-		*Bone.Name, *RB.Name, RB.Shape, static_cast<int32>(PhysType));
+		TEXT("✓ Created BodySetup for bone '%s' (RB: '%s', Shape: %d, PhysType: %d) - Total BodySetups: %d"),
+		*Bone.Name, *RB.Name, RB.Shape, static_cast<int32>(PhysType), NewBodySetupCount);
 
 	return BodySetup;
 }

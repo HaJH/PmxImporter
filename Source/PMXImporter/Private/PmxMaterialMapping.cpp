@@ -53,12 +53,15 @@ void FPmxMaterialMapping::CreateMaterials(const FPmxModel& PmxModel, const TMap<
 		}
 		++Count;
 
+		// Sanitize for display (removes special chars, preserves Unicode)
+		FString SanitizedLabel = FPmxUtils::SanitizePackagePath(UniqueLabel);
+
 		// All material instances must have MI_ prefix
-		const FString DisplayLabel = FString::Printf(TEXT("MI_%s"), *UniqueLabel);
+		const FString DisplayLabel = FString::Printf(TEXT("MI_%s"), *SanitizedLabel);
 
 		// Create a Material Instance node only; parent will be set by Import UI pipeline.
-		const FString MatSanitized = FPmxUtils::SanitizeAsciiToken(UniqueLabel);
-		const FString MiNodeUid = FString::Printf(TEXT("/PMX/Materials/%d_%s"), MatIdx, *MatSanitized);
+		// For NodeUid, use index-based naming to ensure uniqueness even with Unicode names
+		const FString MiNodeUid = FString::Printf(TEXT("/PMX/Materials/%d_%s"), MatIdx, *SanitizedLabel);
 		UInterchangeMaterialInstanceNode* MiNode = UInterchangeMaterialInstanceNode::Create(&BaseNodeContainer, *DisplayLabel, *MiNodeUid);
 		UE_LOG(LogPMXImporter, Verbose, TEXT("PMX Translator: Create MI Node Display='%s' SlotLabel='%s' NodeUid='%s'"), *DisplayLabel, *UniqueLabel, *MiNodeUid);
 		if (ensure(MiNode))

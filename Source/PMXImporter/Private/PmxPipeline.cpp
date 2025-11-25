@@ -21,6 +21,8 @@
 #include "Engine/Texture.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "HAL/PlatformProcess.h"
+#include "Rendering/SkeletalMeshLODModel.h"
+#include "Rendering/SkeletalMeshModel.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(PmxPipeline)
 
@@ -564,6 +566,7 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 
 		if (FoundCache && FoundCache->IsValid())
 		{
+			// Log skeleton state before physics asset creation
 			// Build physics asset from PMX data
 			BuildPmxPhysicsAsset(PhysicsAsset, SkeletalMesh, **FoundCache);
 
