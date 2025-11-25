@@ -4,6 +4,7 @@
 
 #include "InterchangeSourceData.h"
 #include "Nodes/InterchangeBaseNodeContainer.h"
+#include "Nodes/InterchangeSourceNode.h"
 #include "InterchangeSceneNode.h"
 #include "Nodes/InterchangeBaseNode.h"
 #include "InterchangeSkeletonFactoryNode.h"
@@ -33,9 +34,12 @@
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PmxNodeBuilder.h"
 #include "PmxMaterialMapping.h"
+#include "PmxPhysicsBuilder.h"
+#include "ImageCore.h"
 
-// Static member definition
+// Static member definitions
 TMap<FString, TSharedPtr<FPmxModel>> UPmxTranslator::MeshPayloadCache;
+TMap<FString, TSharedPtr<FPmxPhysicsCache>> UPmxTranslator::PhysicsPayloadCache;
 
 bool UPmxTranslator::CanImportSourceData(const UInterchangeSourceData* InSourceData) const
 {
@@ -80,10 +84,121 @@ bool UPmxTranslator::Translate(UInterchangeBaseNodeContainer& BaseNodeContainer)
     }
 
     UE_LOG(LogPMXImporter, Log, TEXT("Successfully loaded PMX model: %s"), *PmxModel.Header.ModelName);
-    
-    // Initialize import options
-    ImportOptions = FPmxImportOptions(); // Defaults; can be overridden by pipeline before Translate
-    
+
+    // Initialize import options with defaults
+    ImportOptions = FPmxImportOptions();
+
+    // Read options from SourceNode (set by UPmxPipeline::ExecutePipeline)
+    if (const UInterchangeSourceNode* SourceNode = UInterchangeSourceNode::GetUniqueInstance(&BaseNodeContainer))
+    {
+        // Common options
+        float ScaleValue;
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:Scale"), ScaleValue))
+        {
+            ImportOptions.Scale = ScaleValue;
+        }
+
+        // Mesh options
+        bool bValue;
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:ImportMesh"), bValue))
+        {
+            ImportOptions.bImportMesh = bValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:ImportMorphs"), bValue))
+        {
+            ImportOptions.bImportMorphs = bValue;
+        }
+
+        // Skeleton options
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:ImportArmature"), bValue))
+        {
+            ImportOptions.bImportArmature = bValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:RenameLRBones"), bValue))
+        {
+            ImportOptions.bRenameLRBones = bValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:FixIKLinks"), bValue))
+        {
+            ImportOptions.bFixIKLinks = bValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:ApplyBoneFixedAxis"), bValue))
+        {
+            ImportOptions.bApplyBoneFixedAxis = bValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:UseUnderscore"), bValue))
+        {
+            ImportOptions.bUseUnderscore = bValue;
+        }
+
+        // Physics options
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:ImportPhysics"), bValue))
+        {
+            ImportOptions.bImportPhysics = bValue;
+        }
+        FString PhysicsType2ModeStr;
+        if (SourceNode->GetStringAttribute(TEXT("PMX:PhysicsType2Mode"), PhysicsType2ModeStr))
+        {
+            ImportOptions.PhysicsType2Mode = static_cast<EPmxPhysicsType2Handling>(FCString::Atoi(*PhysicsType2ModeStr));
+        }
+        float FloatValue;
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:PhysicsMassScale"), FloatValue))
+        {
+            ImportOptions.PhysicsMassScale = FloatValue;
+        }
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:PhysicsDampingScale"), FloatValue))
+        {
+            ImportOptions.PhysicsDampingScale = FloatValue;
+        }
+
+        // Material options
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:UseMipmap"), bValue))
+        {
+            ImportOptions.bUseMipmap = bValue;
+        }
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:SphBlendFactor"), FloatValue))
+        {
+            ImportOptions.SphBlendFactor = FloatValue;
+        }
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:SpaBlendFactor"), FloatValue))
+        {
+            ImportOptions.SpaBlendFactor = FloatValue;
+        }
+
+        // Advanced options
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:CleanModel"), bValue))
+        {
+            ImportOptions.bCleanModel = bValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:RemoveDoubles"), bValue))
+        {
+            ImportOptions.bRemoveDoubles = bValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:MarkSharpEdges"), bValue))
+        {
+            ImportOptions.bMarkSharpEdges = bValue;
+        }
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:SharpEdgeAngle"), FloatValue))
+        {
+            ImportOptions.SharpEdgeAngle = FloatValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:ImportAddUV2AsVertexColors"), bValue))
+        {
+            ImportOptions.bImportAddUV2AsVertexColors = bValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:ImportDisplay"), bValue))
+        {
+            ImportOptions.bImportDisplay = bValue;
+        }
+
+        UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxTranslator: Options loaded from SourceNode (Scale=%.2f, ImportMorphs=%d, ImportPhysics=%d)"),
+            ImportOptions.Scale, ImportOptions.bImportMorphs, ImportOptions.bImportPhysics);
+    }
+    else
+    {
+        UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxTranslator: No SourceNode found, using default options"));
+    }
+
     // Execute main import logic
     bool bSuccess = ExecutePmxImport(PmxModel, BaseNodeContainer);
     
@@ -497,21 +612,57 @@ void UPmxTranslator::ImportArmatureSection(const FPmxModel& PmxModel, UInterchan
     ApplyBoneTransforms(PmxModel, BoneIndexToJointNode);
 }
 
-// Placeholder implementations for remaining methods
 void UPmxTranslator::ImportPhysicsSection(const FPmxModel& PmxModel, UInterchangeBaseNodeContainer& BaseNodeContainer,
     const FString& SkeletonUid, const FString& SkeletalMeshUid) const
 {
-    // Create PhysicsAsset factory node only if enabled
-    UInterchangePhysicsAssetFactoryNode* PhysicsAssetFactoryNode = NewObject<UInterchangePhysicsAssetFactoryNode>(&BaseNodeContainer);
-    if (PhysicsAssetFactoryNode)
+    // Skip if no physics data
+    if (PmxModel.RigidBodies.IsEmpty())
     {
-        const FString ModelName = PmxModel.Header.ModelName.IsEmpty() ? TEXT("PMX_Root") : PmxModel.Header.ModelName;
-        const FString PhysicsAssetUid = FString::Printf(TEXT("/PMX/PhysicsAsset_%s"), *ModelName);
-        const FString PhysicsAssetDisplayLabel = ModelName + TEXT("_PhysicsAsset");
-        PhysicsAssetFactoryNode->InitializePhysicsAssetNode(PhysicsAssetUid, PhysicsAssetDisplayLabel, UPhysicsAsset::StaticClass()->GetName(), &BaseNodeContainer);
-        PhysicsAssetFactoryNode->SetCustomSkeletalMeshUid(SkeletalMeshUid);
-        BaseNodeContainer.AddNode(PhysicsAssetFactoryNode);
+        UE_LOG(LogPMXImporter, Display, TEXT("No rigid bodies in PMX model, skipping physics import"));
+        return;
     }
+
+    // Create PhysicsAsset factory node
+    UInterchangePhysicsAssetFactoryNode* PhysicsAssetFactoryNode = NewObject<UInterchangePhysicsAssetFactoryNode>(&BaseNodeContainer);
+    if (!PhysicsAssetFactoryNode)
+    {
+        UE_LOG(LogPMXImporter, Error, TEXT("Failed to create PhysicsAsset factory node"));
+        return;
+    }
+
+    const FString ModelName = PmxModel.Header.ModelName.IsEmpty() ? TEXT("PMX_Root") : PmxModel.Header.ModelName;
+    const FString PhysicsAssetUid = FString::Printf(TEXT("/PMX/PhysicsAsset_%s"), *ModelName);
+    const FString PhysicsAssetDisplayLabel = ModelName + TEXT("_PhysicsAsset");
+
+    PhysicsAssetFactoryNode->InitializePhysicsAssetNode(PhysicsAssetUid, PhysicsAssetDisplayLabel, UPhysicsAsset::StaticClass()->GetName(), &BaseNodeContainer);
+    PhysicsAssetFactoryNode->SetCustomSkeletalMeshUid(SkeletalMeshUid);
+    BaseNodeContainer.AddNode(PhysicsAssetFactoryNode);
+
+    // Cache physics data for post-import processing
+    TSharedPtr<FPmxPhysicsCache> PhysicsCache = MakeShared<FPmxPhysicsCache>();
+    PhysicsCache->RigidBodies = PmxModel.RigidBodies;
+    PhysicsCache->Joints = PmxModel.Joints;
+    PhysicsCache->Bones = PmxModel.Bones;
+    PhysicsCache->SourceFilePath = SourceData ? SourceData->GetFilename() : TEXT("");
+    PhysicsCache->Scale = ImportOptions.Scale;
+    PhysicsCache->Type2Mode = ImportOptions.PhysicsType2Mode;
+    PhysicsCache->MassScale = ImportOptions.PhysicsMassScale;
+    PhysicsCache->DampingScale = ImportOptions.PhysicsDampingScale;
+
+    // Store in static cache using filename (without extension) as key for matching with imported mesh name
+    FString CacheKey;
+    if (SourceData)
+    {
+        CacheKey = FPaths::GetBaseFilename(SourceData->GetFilename());
+    }
+    else
+    {
+        CacheKey = ModelName;
+    }
+    PhysicsPayloadCache.Add(CacheKey, PhysicsCache);
+
+    UE_LOG(LogPMXImporter, Display, TEXT("Cached %d rigid bodies and %d joints for post-import processing (key: %s)"),
+        PmxModel.RigidBodies.Num(), PmxModel.Joints.Num(), *CacheKey);
 }
 
 void UPmxTranslator::ImportMorphsSection(const FPmxModel& PmxModel, UInterchangeBaseNodeContainer& BaseNodeContainer, const FString& MeshUid) const
@@ -561,14 +712,17 @@ TOptional<UE::Interchange::FMeshPayloadData> UPmxTranslator::GetMeshPayloadData(
     FSkeletalMeshAttributes SkeletalAttribsRW(MD);
     FSkinWeightsVertexAttributesRef VertexSkinWeights = SkeletalAttribsRW.GetVertexSkinWeights(NAME_None);
 
-    // Fill JointNames using PMX bone names only (do not include synthetic root)
-    Data.JointNames.Reset(Model.Bones.Num());
-    Data.JointNames.Reserve(Model.Bones.Num());
+    // Fill JointNames including synthetic Root bone (must match SkeletalMesh bone structure)
+    // SkeletalMesh has Root at index 0, then PMX bones at indices 1..N
+    // Skin weights must use these adjusted indices
+    Data.JointNames.Reset(Model.Bones.Num() + 1);  // +1 for Root
+    Data.JointNames.Reserve(Model.Bones.Num() + 1);
+    Data.JointNames.Add(TEXT("Root"));  // Index 0: synthetic Root bone
     for (int32 BoneIndex = 0; BoneIndex < Model.Bones.Num(); ++BoneIndex)
     {
         const FPmxBone& Bone = Model.Bones[BoneIndex];
         const FString BoneName = Bone.Name.IsEmpty() ? FString::Printf(TEXT("Bone_%d"), BoneIndex) : Bone.Name;
-        Data.JointNames.Add(BoneName);
+        Data.JointNames.Add(BoneName);  // PMX bone indices are now offset by +1
     }
 
     // Create vertices and set positions (apply optional mesh global transform if provided)
@@ -612,18 +766,97 @@ TOptional<UE::Interchange::FMeshPayloadData> UPmxTranslator::GetMeshPayloadData(
             BWArray.Reserve(PairCount);
             for (int32 i = 0; i < PairCount; ++i)
             {
-                const int32 BoneIndex = V.BoneIndices[i];
+                const int32 PmxBoneIndex = V.BoneIndices[i];
                 const float Weight = V.BoneWeights[i];
-                if (BoneIndex >= 0 && BoneIndex < Model.Bones.Num() && Weight > 0.0f && FMath::IsFinite(Weight))
+                if (PmxBoneIndex >= 0 && PmxBoneIndex < Model.Bones.Num() && Weight > 0.0f && FMath::IsFinite(Weight))
                 {
-                    // Use PMX bone index directly (no synthetic root in JointNames)
-                    BWArray.Emplace(static_cast<uint16>(BoneIndex), Weight);
+                    // Offset by +1 because JointNames[0] is synthetic Root, PMX bones start at index 1
+                    const int32 AdjustedBoneIndex = PmxBoneIndex + 1;
+                    BWArray.Emplace(static_cast<uint16>(AdjustedBoneIndex), Weight);
                 }
             }
             if (VertexSkinWeights.IsValid())
             {
                 VertexSkinWeights.Set(VId, MakeArrayView<const UE::AnimationCore::FBoneWeight>(BWArray.GetData(), BWArray.Num()), Settings);
             }
+        }
+    }
+
+    // === DIAGNOSTIC: Skin Weight Statistics ===
+    if (PayLoadKey.Type != EInterchangeMeshPayLoadType::MORPHTARGET)
+    {
+        int32 MaxPmxBoneIndex = -1;
+        int32 MinPmxBoneIndex = INT_MAX;
+        TSet<int32> UsedPmxBoneIndices;
+
+        for (int32 vid = 0; vid < Model.Vertices.Num(); ++vid)
+        {
+            const auto& V = Model.Vertices[vid];
+            const int32 PairCount = FMath::Min(V.BoneIndices.Num(), V.BoneWeights.Num());
+            for (int32 i = 0; i < PairCount; ++i)
+            {
+                const int32 PmxBoneIndex = V.BoneIndices[i];
+                const float Weight = V.BoneWeights[i];
+                if (PmxBoneIndex >= 0 && Weight > 0.0f)
+                {
+                    UsedPmxBoneIndices.Add(PmxBoneIndex);
+                    MaxPmxBoneIndex = FMath::Max(MaxPmxBoneIndex, PmxBoneIndex);
+                    MinPmxBoneIndex = FMath::Min(MinPmxBoneIndex, PmxBoneIndex);
+                }
+            }
+        }
+
+        UE_LOG(LogPMXImporter, Display, TEXT("=== DIAGNOSTIC: Skin Weight Statistics ==="));
+        UE_LOG(LogPMXImporter, Display, TEXT("  JointNames count: %d (Root + %d PMX bones)"), Data.JointNames.Num(), Model.Bones.Num());
+        UE_LOG(LogPMXImporter, Display, TEXT("  PMX bone indices used: min=%d, max=%d, unique=%d"),
+            MinPmxBoneIndex, MaxPmxBoneIndex, UsedPmxBoneIndices.Num());
+        UE_LOG(LogPMXImporter, Display, TEXT("  Adjusted indices (after +1 offset): min=%d, max=%d"),
+            MinPmxBoneIndex + 1, MaxPmxBoneIndex + 1);
+
+        // Log JointNames sample (first 5, last 5, and sample at max used index)
+        UE_LOG(LogPMXImporter, Display, TEXT("=== JointNames Sample ==="));
+        for (int32 i = 0; i < FMath::Min(5, Data.JointNames.Num()); ++i)
+        {
+            UE_LOG(LogPMXImporter, Display, TEXT("  JointNames[%d]: '%s'"), i, *Data.JointNames[i]);
+        }
+        if (Data.JointNames.Num() > 10)
+        {
+            UE_LOG(LogPMXImporter, Display, TEXT("  ..."));
+            for (int32 i = Data.JointNames.Num() - 5; i < Data.JointNames.Num(); ++i)
+            {
+                UE_LOG(LogPMXImporter, Display, TEXT("  JointNames[%d]: '%s'"), i, *Data.JointNames[i]);
+            }
+        }
+        // Log the JointName at max used skin weight index
+        const int32 MaxAdjustedIdx = MaxPmxBoneIndex + 1;
+        if (MaxAdjustedIdx >= 0 && MaxAdjustedIdx < Data.JointNames.Num())
+        {
+            UE_LOG(LogPMXImporter, Display, TEXT("  JointNames[%d] (max used): '%s'"), MaxAdjustedIdx, *Data.JointNames[MaxAdjustedIdx]);
+        }
+
+        // Check for out-of-range adjusted indices
+        int32 OutOfRangeCount = 0;
+        for (int32 PmxBoneIdx : UsedPmxBoneIndices)
+        {
+            const int32 AdjustedIdx = PmxBoneIdx + 1;  // +1 for Root offset
+            if (AdjustedIdx >= Data.JointNames.Num())
+            {
+                ++OutOfRangeCount;
+                if (OutOfRangeCount <= 5)
+                {
+                    UE_LOG(LogPMXImporter, Error,
+                        TEXT("  OUT OF RANGE: PMX bone %d -> adjusted %d (JointNames max: %d)"),
+                        PmxBoneIdx, AdjustedIdx, Data.JointNames.Num() - 1);
+                }
+            }
+        }
+        if (OutOfRangeCount > 0)
+        {
+            UE_LOG(LogPMXImporter, Error, TEXT("  Total out-of-range bone indices: %d"), OutOfRangeCount);
+        }
+        else
+        {
+            UE_LOG(LogPMXImporter, Display, TEXT("  All adjusted bone indices are within JointNames range"));
         }
     }
 
@@ -873,15 +1106,20 @@ TOptional<UE::Interchange::FImportImage> UPmxTranslator::GetTexturePayloadData(c
         }
     }
 
-    // 3) Fallback: create a 1x1 dummy image to avoid factory error and keep import stable
-    UE_LOG(LogPMXImporter, Warning, TEXT("Pmx Translator: No texture translator for '%s'. Using 1x1 dummy texture."), *PayloadKey);
+    // 3) Fallback: create a small dummy image to avoid factory error and keep import stable
+    UE_LOG(LogPMXImporter, Warning, TEXT("Pmx Translator: No texture translator for '%s'. Using 4x4 BGRA8 dummy texture."), *PayloadKey);
     UE::Interchange::FImportImage Dummy;
-    Dummy.Init2DWithParams(1, 1, TSF_G8, true, true);
+    // Use BGRA8 (uncompressed 4 channels) so downstream factories can build mips without warnings
+    Dummy.Init2DWithParams(4, 4, TSF_BGRA8, /*bSRGB*/ true, /*bUseGamma*/ true);
     {
         TArrayView64<uint8> Raw = Dummy.GetArrayViewOfRawData();
-        if (Raw.Num() > 0)
+        // Fill 4x4 with opaque white
+        for (int32 i = 0; i + 3 < Raw.Num(); i += 4)
         {
-            Raw[0] = 255; // white pixel for G8
+            Raw[i + 0] = 255; // B
+            Raw[i + 1] = 255; // G
+            Raw[i + 2] = 255; // R
+            Raw[i + 3] = 255; // A
         }
     }
     return TOptional<UE::Interchange::FImportImage>(MoveTemp(Dummy));
@@ -995,8 +1233,9 @@ void UPmxTranslator::ImportTextures(const FPmxModel& PmxModel, const FString& Pm
             continue;
         }
         
-        // Create texture node
-        const FString TexBaseName = FPaths::GetBaseFilename(PmxTex.TexturePath);
+        // Create texture node (sanitize name: remove extension and unsafe chars)
+        FString TexBaseName = FPaths::GetBaseFilename(PmxTex.TexturePath);
+        TexBaseName = SafeObjectName(TexBaseName, 64);
         const FString TexNodePath = FString::Printf(TEXT("/PMX/Textures/MMD_%s_%d"), *TexBaseName, TexIdx);
         UInterchangeTexture2DNode* Texture2DNode = UInterchangeTexture2DNode::Create(&BaseNodeContainer, *TexNodePath);
         
@@ -1008,6 +1247,12 @@ void UPmxTranslator::ImportTextures(const FPmxModel& PmxModel, const FString& Pm
                 ? FPaths::ConvertRelativePathToFull(FPaths::Combine(PmxBaseDir, PmxTex.TexturePath))
                 : PmxTex.TexturePath;
             FPaths::CollapseRelativeDirectories(AbsPath);
+            FPaths::MakeStandardFilename(AbsPath);
+            // Advise user if using UNC path which may fail with certain translators
+            if (AbsPath.StartsWith(TEXT("\\\\")) || AbsPath.StartsWith(TEXT("//")))
+            {
+                UE_LOG(LogPMXImporter, Display, TEXT("Pmx Translator: Texture path '%s' is a network path. If import fails, try copying assets to a local drive."), *AbsPath);
+            }
             
             Texture2DNode->SetPayLoadKey(AbsPath);
             Texture2DNode->SetCustomSRGB(true);

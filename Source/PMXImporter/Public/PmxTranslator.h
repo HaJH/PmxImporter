@@ -14,6 +14,18 @@ class UInterchangeBaseNodeContainer;
 class UInterchangeSceneNode;
 class UInterchangeSkeletonFactoryNode;
 struct FPmxModel;
+struct FPmxRigidBody;
+struct FPmxJoint;
+struct FPmxBone;
+
+// Physics Type 2 handling mode for PMX rigid bodies
+UENUM()
+enum class EPmxPhysicsType2Handling : uint8
+{
+	ConvertToKinematic,  // Type 2 -> Kinematic (bone follows physics partially)
+	ConvertToDynamic,    // Type 2 -> Simulated (full physics simulation)
+	Skip                 // Skip Type 2 bodies entirely
+};
 
 USTRUCT()
 struct FPmxImportOptions
@@ -71,15 +83,38 @@ struct FPmxImportOptions
     // Bone options
     UPROPERTY()
     bool bFixIKLinks = false;
-    
+
     UPROPERTY()
     bool bApplyBoneFixedAxis = false;
-    
+
     UPROPERTY()
     bool bRenameLRBones = false;
-    
+
     UPROPERTY()
     bool bUseUnderscore = false;
+
+    // Physics options
+    UPROPERTY()
+    EPmxPhysicsType2Handling PhysicsType2Mode = EPmxPhysicsType2Handling::ConvertToKinematic;
+
+    UPROPERTY()
+    float PhysicsMassScale = 1.0f;
+
+    UPROPERTY()
+    float PhysicsDampingScale = 1.0f;
+};
+
+// Cache structure for PMX physics data (used in post-import)
+struct FPmxPhysicsCache
+{
+    TArray<FPmxRigidBody> RigidBodies;
+    TArray<FPmxJoint> Joints;
+    TArray<FPmxBone> Bones;
+    FString SourceFilePath;
+    float Scale = 8.0f;
+    EPmxPhysicsType2Handling Type2Mode = EPmxPhysicsType2Handling::ConvertToKinematic;
+    float MassScale = 1.0f;
+    float DampingScale = 1.0f;
 };
 
 UCLASS()
@@ -111,6 +146,9 @@ public:
 
     // Static cache for PMX geometry per import session
     static TMap<FString, TSharedPtr<FPmxModel>> MeshPayloadCache;
+
+    // Static cache for PMX physics data (used in post-import callback)
+    static TMap<FString, TSharedPtr<FPmxPhysicsCache>> PhysicsPayloadCache;
 
 private:
     // Import options

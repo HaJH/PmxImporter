@@ -35,7 +35,9 @@ public class PMXImporter : ModuleRules
             "StaticMeshDescription",
             "SkeletalMeshDescription",
             "AnimationCore",
-            "AssetRegistry"
+            "AssetRegistry",
+            // For image resizing/utilities used by the translator when handling texture payloads
+            "ImageCore"
         });
 
         PublicIncludePaths.AddRange(new string[]
@@ -43,7 +45,8 @@ public class PMXImporter : ModuleRules
             Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/FactoryNodes/Public"),
             Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Nodes/Public"),
             Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Import/Public"),
-            Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Import/Public/Mesh")
+            Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Import/Public/Mesh"),
+            Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Pipelines/Public")
         });
         PrivateIncludePaths.AddRange(new string[] {});
     }
