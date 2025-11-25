@@ -9,6 +9,8 @@
 #include "Nodes/InterchangeBaseNodeContainer.h"
 #include "Nodes/InterchangeSourceNode.h"
 #include "InterchangeSkeletalMeshFactoryNode.h"
+#include "InterchangeSkeletalMeshLodDataNode.h"
+#include "InterchangeMeshNode.h"
 #include "InterchangePhysicsAssetFactoryNode.h"
 #include "InterchangeTexture2DFactoryNode.h"
 #include "InterchangeMaterialFactoryNode.h"
@@ -18,6 +20,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/Texture.h"
 #include "PhysicsEngine/PhysicsAsset.h"
+#include "HAL/PlatformProcess.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(PmxPipeline)
 
@@ -214,9 +217,30 @@ void UPmxPipeline::CreateTextureFactoryNodes(UInterchangeBaseNodeContainer* Base
         }
 
         // 밉맵 설정 (파이프라인 옵션)
-        const uint8 MipGenSetting = bUseMipmap ?
-            static_cast<uint8>(TextureMipGenSettings::TMGS_FromTextureGroup) :
-            static_cast<uint8>(TextureMipGenSettings::TMGS_NoMipmaps);
+        // toon 텍스처 또는 작은 텍스처 감지 (mipmap 생성 실패 방지)
+        FString TextureDisplayLabel = TextureNode->GetDisplayLabel();
+        bool bIsToonOrSmallTexture = TextureDisplayLabel.Contains(TEXT("toon"), ESearchCase::IgnoreCase) ||
+                                       TextureDisplayLabel.Contains(TEXT("表情")) ||
+                                       TextureDisplayLabel.Contains(TEXT("expression"), ESearchCase::IgnoreCase);
+
+        uint8 MipGenSetting = static_cast<uint8>(TextureMipGenSettings::TMGS_NoMipmaps);
+        if (bUseMipmap)
+        {
+            if (bIsToonOrSmallTexture)
+            {
+                // Toon/small textures: disable mipmaps to prevent generation failure
+                MipGenSetting = static_cast<uint8>(TextureMipGenSettings::TMGS_NoMipmaps);
+                UE_LOG(LogPMXImporter, Display,
+                    TEXT("UPmxPipeline: Texture '%s' detected as toon/small texture, disabling mipmaps"),
+                    *TextureDisplayLabel);
+            }
+            else
+            {
+                // Regular textures: generate mipmaps
+                MipGenSetting = static_cast<uint8>(TextureMipGenSettings::TMGS_FromTextureGroup);
+            }
+        }
+
         FactoryNode->SetCustomMipGenSettings(MipGenSetting, false);
 
         UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Created Texture2DFactoryNode '%s' for '%s'"),
@@ -284,6 +308,75 @@ void UPmxPipeline::CreateMaterialFactoryNodes(UInterchangeBaseNodeContainer* Bas
         UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Created MaterialInstanceFactoryNode '%s' for '%s'"),
             *FactoryUid, *MaterialNode->GetDisplayLabel());
     }
+
+    // Now connect material factory nodes to SkeletalMesh factory nodes
+    BaseNodeContainer->IterateNodesOfType<UInterchangeSkeletalMeshFactoryNode>(
+        [BaseNodeContainer](const FString& SkeletalMeshUid, UInterchangeSkeletalMeshFactoryNode* SkeletalMeshNode)
+        {
+            if (!SkeletalMeshNode)
+            {
+                return;
+            }
+
+            // Get LOD data nodes
+            TArray<FString> LodDataUids;
+            SkeletalMeshNode->GetLodDataUniqueIds(LodDataUids);
+
+            for (const FString& LodDataUid : LodDataUids)
+            {
+                const UInterchangeSkeletalMeshLodDataNode* LodDataNode =
+                    Cast<UInterchangeSkeletalMeshLodDataNode>(BaseNodeContainer->GetNode(LodDataUid));
+
+                if (!LodDataNode)
+                {
+                    continue;
+                }
+
+                // Get mesh nodes from LOD
+                TArray<FString> MeshUids;
+                LodDataNode->GetMeshUids(MeshUids);
+
+                for (const FString& MeshUid : MeshUids)
+                {
+                    const UInterchangeMeshNode* MeshNode =
+                        Cast<UInterchangeMeshNode>(BaseNodeContainer->GetNode(MeshUid));
+
+                    if (!MeshNode)
+                    {
+                        continue;
+                    }
+
+                    // Get material slot names and dependencies from mesh node
+                    TMap<FString, FString> SlotMaterialDependencies;
+                    MeshNode->GetSlotMaterialDependencies(SlotMaterialDependencies);
+
+                    // For each material slot, set the factory UID on SkeletalMeshFactoryNode
+                    for (const TPair<FString, FString>& Pair : SlotMaterialDependencies)
+                    {
+                        const FString& SlotName = Pair.Key;
+                        const FString& MaterialNodeUid = Pair.Value;
+
+                        // Convert Material Node UID to Factory UID
+                        const FString MaterialFactoryUid =
+                            UInterchangeBaseMaterialFactoryNode::GetMaterialFactoryNodeUidFromMaterialNodeUid(MaterialNodeUid);
+
+                        // Set material dependency on SkeletalMesh factory node
+                        SkeletalMeshNode->SetSlotMaterialDependencyUid(SlotName, MaterialFactoryUid);
+
+                        // Add factory dependency to ensure materials are created before the mesh
+                        TArray<FString> FactoryDependencies;
+                        SkeletalMeshNode->GetFactoryDependencies(FactoryDependencies);
+                        if (!FactoryDependencies.Contains(MaterialFactoryUid))
+                        {
+                            SkeletalMeshNode->AddFactoryDependencyUid(MaterialFactoryUid);
+                        }
+
+                        UE_LOG(LogPMXImporter, Display, TEXT("UPmxPipeline: Connected material slot '%s' to factory '%s' for SkeletalMesh '%s'"),
+                            *SlotName, *MaterialFactoryUid, *SkeletalMeshUid);
+                    }
+                }
+            }
+        });
 }
 
 void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer* BaseNodeContainer, const FString& NodeKey, UObject* CreatedAsset, bool bIsAReimport)
@@ -324,9 +417,44 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 						FSoftObjectPath TexPath;
 						if (TexFactory->GetCustomReferenceObject(TexPath))
 						{
-							if (UTexture* Texture = Cast<UTexture>(TexPath.TryLoad()))
+							// Skip if texture path is invalid or empty
+							if (!TexPath.IsValid() || TexPath.ToString().IsEmpty())
+							{
+								UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Skipping invalid/empty texture path for MI '%s'"),
+									*MI->GetName());
+								continue;
+							}
+
+							// Retry logic for texture loading
+							UTexture* Texture = nullptr;
+							int32 MaxRetries = 5;
+							for (int32 Retry = 0; Retry < MaxRetries && !Texture; ++Retry)
+							{
+								if (Retry > 0)
+								{
+									// Wait a bit before retrying (not on first attempt)
+									FPlatformProcess::Sleep(0.1f); // 100ms
+								}
+
+								Texture = Cast<UTexture>(TexPath.TryLoad());
+
+								if (!Texture)
+								{
+									UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Texture load retry %d/%d for '%s'"),
+										Retry + 1, MaxRetries, *TexPath.ToString());
+								}
+							}
+
+							if (Texture)
 							{
 								MI->SetTextureParameterValueEditorOnly(FName("BaseColorTexture"), Texture);
+								UE_LOG(LogPMXImporter, Display, TEXT("UPmxPipeline: Successfully set BaseColorTexture for MI '%s'"),
+									*MI->GetName());
+							}
+							else
+							{
+								UE_LOG(LogPMXImporter, Warning, TEXT("UPmxPipeline: Failed to load texture '%s' after %d retries for MI '%s'"),
+									*TexPath.ToString(), MaxRetries, *MI->GetName());
 							}
 						}
 					}

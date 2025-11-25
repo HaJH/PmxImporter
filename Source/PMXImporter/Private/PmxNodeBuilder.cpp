@@ -194,7 +194,27 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 			BaseNodeContainer.SetNodeParentUid(JointNode->GetUniqueID(), JointRootUid);
 		}
 	}
-	
+
+	// 본 계층구조 생성 완료 후 진단 로그 추가
+	UE_LOG(LogPMXImporter, Display, TEXT("=== Bone Hierarchy Summary ==="));
+	UE_LOG(LogPMXImporter, Display, TEXT("  Synthetic Root Joint: 1"));
+	UE_LOG(LogPMXImporter, Display, TEXT("  PMX Bones created: %d"), PmxModel.Bones.Num());
+	UE_LOG(LogPMXImporter, Display, TEXT("  Total scene nodes (Joints): %d"),
+		1 + PmxModel.Bones.Num());
+
+	// 부모 관계 검증
+	int32 RootedBones = 0;
+	for (int32 i = 0; i < PmxModel.Bones.Num(); ++i)
+	{
+		const FPmxBone& Bone = PmxModel.Bones[i];
+		if (Bone.ParentBoneIndex < 0 || Bone.ParentBoneIndex >= PmxModel.Bones.Num())
+		{
+			++RootedBones;
+		}
+	}
+	UE_LOG(LogPMXImporter, Display, TEXT("  Bones directly parented to Root: %d"),
+		RootedBones);
+
 	// Always return the Joint Root as skeleton root
 	return JointRootUid;
 }

@@ -101,9 +101,9 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 		// Validate bone index
 		if (RB.RelatedBoneIndex < 0 || RB.RelatedBoneIndex >= PhysicsData.Bones.Num())
 		{
-			UE_LOG(LogPMXImporter, Warning,
-				TEXT("Skipping RigidBody '%s': Invalid bone index (%d)"),
-				*RB.Name, RB.RelatedBoneIndex);
+			UE_LOG(LogPMXImporter, Verbose,  // Warning -> Verbose
+				TEXT("Skipping RigidBody '%s' (Index %d): Invalid bone reference (%d). This is normal for disconnected physics bodies in the PMX file."),
+				*RB.Name, RBIndex, RB.RelatedBoneIndex);
 			continue;
 		}
 
@@ -123,7 +123,18 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 	PhysicsAsset->UpdateBodySetupIndexMap();
 	PhysicsAsset->UpdateBoundsBodiesArray();
 
-	UE_LOG(LogPMXImporter, Display, TEXT("Created %d BodySetups"), CreatedBodies);
+	// 요약 통계 로그
+	int32 SkippedRigidBodies = PhysicsData.RigidBodies.Num() - CreatedBodies;
+	if (SkippedRigidBodies > 0)
+	{
+		UE_LOG(LogPMXImporter, Display,
+			TEXT("Created %d BodySetups (%d/%d valid RigidBodies, %d skipped due to invalid bone references)"),
+			CreatedBodies, CreatedBodies, PhysicsData.RigidBodies.Num(), SkippedRigidBodies);
+	}
+	else
+	{
+		UE_LOG(LogPMXImporter, Display, TEXT("Created %d BodySetups"), CreatedBodies);
+	}
 
 	// Create Constraints for each Joint
 	int32 CreatedConstraints = 0;

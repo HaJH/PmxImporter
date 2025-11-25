@@ -551,15 +551,12 @@ void UPmxTranslator::ImportMeshSection(const FPmxModel& PmxModel, UInterchangeBa
     MeshNode->SetCustomVertexCount(PmxModel.Vertices.Num());
     MeshNode->SetCustomPolygonCount(PmxModel.Indices.Num() / 3);
     
-    // Set material slots
+    // Set material slots on mesh node
+    // Note: Pipeline will connect these to SkeletalMeshFactoryNode after material factory nodes are created
     for (int32 MatIdx = 0; MatIdx < OutMaterialUids.Num(); ++MatIdx)
     {
         const FString SlotName = SlotNames.IsValidIndex(MatIdx) ? SlotNames[MatIdx] : FString::FromInt(MatIdx);
         MeshNode->SetSlotMaterialDependencyUid(SlotName, OutMaterialUids[MatIdx]);
-        
-        // Also set on skeletal mesh factory node
-        const FString FactoryUid = UInterchangeBaseMaterialFactoryNode::GetMaterialFactoryNodeUidFromMaterialNodeUid(OutMaterialUids[MatIdx]);
-        SkeletalMeshNode->SetSlotMaterialDependencyUid(SlotName, FactoryUid);
     }
     
     BaseNodeContainer.AddNode(MeshNode);
@@ -717,6 +714,27 @@ TOptional<UE::Interchange::FMeshPayloadData> UPmxTranslator::GetMeshPayloadData(
         const FPmxBone& Bone = Model.Bones[BoneIndex];
         const FString BoneName = Bone.Name.IsEmpty() ? FString::Printf(TEXT("Bone_%d"), BoneIndex) : Bone.Name;
         Data.JointNames.Add(BoneName);  // PMX bone indices are now offset by +1
+    }
+
+    // JointNames 중복 검사 (경고만 출력)
+    TSet<FString> UniqueJointNames;
+    int32 DuplicateCount = 0;
+    for (int32 i = 0; i < Data.JointNames.Num(); ++i)
+    {
+        bool bAlreadyExists = false;
+        UniqueJointNames.Add(Data.JointNames[i], &bAlreadyExists);
+        if (bAlreadyExists)
+        {
+            UE_LOG(LogPMXImporter, Warning,
+                TEXT("Duplicate JointName at index %d: '%s'"),
+                i, *Data.JointNames[i]);
+            ++DuplicateCount;
+        }
+    }
+    if (DuplicateCount > 0)
+    {
+        UE_LOG(LogPMXImporter, Warning, TEXT("Found %d duplicate JointNames in mesh payload"),
+            DuplicateCount);
     }
 
     // Create vertices and set positions (apply optional mesh global transform if provided)
