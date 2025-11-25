@@ -417,44 +417,45 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 						FSoftObjectPath TexPath;
 						if (TexFactory->GetCustomReferenceObject(TexPath))
 						{
-							// Skip if texture path is invalid or empty
-							if (!TexPath.IsValid() || TexPath.ToString().IsEmpty())
+							// Only proceed if texture path is valid and not empty
+							if (TexPath.IsValid() && !TexPath.ToString().IsEmpty())
 							{
-								UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Skipping invalid/empty texture path for MI '%s'"),
-									*MI->GetName());
-								continue;
-							}
-
-							// Retry logic for texture loading
-							UTexture* Texture = nullptr;
-							int32 MaxRetries = 5;
-							for (int32 Retry = 0; Retry < MaxRetries && !Texture; ++Retry)
-							{
-								if (Retry > 0)
+								// Retry logic for texture loading
+								UTexture* Texture = nullptr;
+								int32 MaxRetries = 5;
+								for (int32 Retry = 0; Retry < MaxRetries && !Texture; ++Retry)
 								{
-									// Wait a bit before retrying (not on first attempt)
-									FPlatformProcess::Sleep(0.1f); // 100ms
+									if (Retry > 0)
+									{
+										// Wait a bit before retrying (not on first attempt)
+										FPlatformProcess::Sleep(0.1f); // 100ms
+									}
+
+									Texture = Cast<UTexture>(TexPath.TryLoad());
+
+									if (!Texture)
+									{
+										UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Texture load retry %d/%d for '%s'"),
+											Retry + 1, MaxRetries, *TexPath.ToString());
+									}
 								}
 
-								Texture = Cast<UTexture>(TexPath.TryLoad());
-
-								if (!Texture)
+								if (Texture)
 								{
-									UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Texture load retry %d/%d for '%s'"),
-										Retry + 1, MaxRetries, *TexPath.ToString());
+									MI->SetTextureParameterValueEditorOnly(FName("BaseColorTexture"), Texture);
+									UE_LOG(LogPMXImporter, Display, TEXT("UPmxPipeline: Successfully set BaseColorTexture for MI '%s'"),
+										*MI->GetName());
 								}
-							}
-
-							if (Texture)
-							{
-								MI->SetTextureParameterValueEditorOnly(FName("BaseColorTexture"), Texture);
-								UE_LOG(LogPMXImporter, Display, TEXT("UPmxPipeline: Successfully set BaseColorTexture for MI '%s'"),
-									*MI->GetName());
+								else
+								{
+									UE_LOG(LogPMXImporter, Warning, TEXT("UPmxPipeline: Failed to load texture '%s' after %d retries for MI '%s'"),
+										*TexPath.ToString(), MaxRetries, *MI->GetName());
+								}
 							}
 							else
 							{
-								UE_LOG(LogPMXImporter, Warning, TEXT("UPmxPipeline: Failed to load texture '%s' after %d retries for MI '%s'"),
-									*TexPath.ToString(), MaxRetries, *MI->GetName());
+								UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Skipping invalid/empty texture path for MI '%s'"),
+									*MI->GetName());
 							}
 						}
 					}
