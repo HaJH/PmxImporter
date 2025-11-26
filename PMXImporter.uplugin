@@ -15,12 +15,12 @@
 	"Modules": [
 		{
 			"Name": "PMXImporter",
-            "Type": "Editor",
-            "LoadingPhase": "PostEngineInit",
-            "PlatformAllowList": [
-                "Win64",
-                "Mac"
-            ]
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"PlatformAllowList": [
+				"Win64",
+				"Mac"
+			]
 		}
 	],
 	"Plugins": [
@@ -28,14 +28,16 @@
 			"Name": "Interchange",
 			"Enabled": true
 		},
-        {
-          "Name": "InterchangeEditor",
-          "Enabled": true
-        }
+		{
+			"Name": "InterchangeEditor",
+			"Enabled": true
+		}
 	],
 	"CreatedBy": "Jeonghyeon Ha",
 	"CreatedByURL": "https://github.com/HaJH",
 	"DocsURL": "https://github.com/HaJH/PmxImporter/blob/main/README.md",
 	"MarketplaceURL": "com.epicgames.launcher://ue/Fab/product/d0d45e1b-c8b1-43a5-b0d4-2ac98b183917",
-	"SupportURL": "mailto:support@hyphengames.com"
+	"SupportURL": "mailto:support@hyphengames.com",
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false
 }
