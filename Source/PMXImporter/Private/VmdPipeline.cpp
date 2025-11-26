@@ -1,7 +1,10 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright (c) 2025 Jeonghyeon Ha. All Rights Reserved.
 
 #include "VmdPipeline.h"
 #include "VmdTranslator.h"
+#include "VmdIKSolver.h"
+#include "VmdIKStateManager.h"
+#include "PmxIKMetadata.h"
 #include "InterchangeAnimSequenceFactoryNode.h"
 #include "InterchangeSkeletonFactoryNode.h"
 #include "Nodes/InterchangeBaseNodeContainer.h"
@@ -11,6 +14,9 @@
 #include "Animation/AnimData/CurveIdentifier.h"
 #include "Animation/AnimCurveTypes.h"
 #include "Curves/RichCurve.h"
+#include "Misc/ScopedSlowTask.h"
+#include "Async/ParallelFor.h"
+#include <atomic>
 #include "LogPMXImporter.h"
 
 UVmdPipeline::UVmdPipeline()
@@ -163,6 +169,14 @@ void UVmdPipeline::PopulateAnimSequenceData(UAnimSequence* AnimSequence, const F
 		return;
 	}
 
+	// Calculate total work for progress bar
+	int32 TotalSteps = 0;
+	if (bImportBoneAnimation) TotalSteps += 1;  // Bone tracks (with or without IK baking)
+	if (bImportMorphAnimation) TotalSteps += 1;
+
+	FScopedSlowTask SlowTask(TotalSteps, NSLOCTEXT("VmdPipeline", "ImportingVMD", "Importing VMD Animation..."));
+	SlowTask.MakeDialog(true);
+
 	IAnimationDataController& Controller = AnimSequence->GetController();
 
 	// Begin editing
@@ -181,15 +195,25 @@ void UVmdPipeline::PopulateAnimSequenceData(UAnimSequence* AnimSequence, const F
 	int32 NumFrames = FMath::CeilToInt(AlignedDuration * SampleRate);
 	Controller.SetNumberOfFrames(NumFrames, false);
 
-	// Add bone animation tracks
+	// Add bone animation tracks (with optional IK baking integrated)
 	if (bImportBoneAnimation)
 	{
-		AddBoneAnimationTracks(AnimSequence, VmdModel);
+		if (bBakeIKToFK)
+		{
+			SlowTask.EnterProgressFrame(1, NSLOCTEXT("VmdPipeline", "AddingBoneTracksWithIK", "Adding bone tracks with IK baking..."));
+			AddBoneAnimationTracksWithIK(AnimSequence, VmdModel);
+		}
+		else
+		{
+			SlowTask.EnterProgressFrame(1, NSLOCTEXT("VmdPipeline", "AddingBoneTracks", "Adding bone animation tracks..."));
+			AddBoneAnimationTracks(AnimSequence, VmdModel);
+		}
 	}
 
 	// Add morph target curves
 	if (bImportMorphAnimation)
 	{
+		SlowTask.EnterProgressFrame(1, NSLOCTEXT("VmdPipeline", "AddingMorphCurves", "Adding morph target curves..."));
 		AddMorphTargetCurves(AnimSequence, VmdModel);
 	}
 
@@ -217,9 +241,19 @@ void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVm
 	double AnimDuration = VmdModel.GetDurationSeconds();
 	int32 TotalAnimFrames = FMath::CeilToInt(AnimDuration * SampleRate);
 
+	// Get unique bone names for progress tracking
+	TSet<FString> UniqueBoneNames = VmdModel.GetUniqueBoneNames();
+	FScopedSlowTask BoneTrackTask(UniqueBoneNames.Num(), NSLOCTEXT("VmdPipeline", "ProcessingBones", "Processing bone tracks..."));
+	BoneTrackTask.MakeDialog(false); // Don't show dialog, parent task shows it
+
+	int32 ProcessedBones = 0;
 	// Iterate through unique bone names in VMD
-	for (const FString& VmdBoneName : VmdModel.GetUniqueBoneNames())
+	for (const FString& VmdBoneName : UniqueBoneNames)
 	{
+		// Update progress
+		BoneTrackTask.EnterProgressFrame(1);
+		++ProcessedBones;
+
 		// Find matching bone in skeleton
 		int32 BoneIndex = RefSkeleton.FindBoneIndex(FName(*VmdBoneName));
 		if (BoneIndex == INDEX_NONE)
@@ -282,6 +316,7 @@ void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVm
 				// No interpolation needed
 				DeltaPosition = ConvertPositionDeltaVmdToUE(Keyframes[KeyBefore].Position);
 				DeltaRotation = ConvertRotationVmdToUE(Keyframes[KeyBefore].Rotation);
+				DeltaRotation.Normalize();
 			}
 			else
 			{
@@ -295,8 +330,18 @@ void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVm
 				DeltaPosition = FMath::Lerp(PosBefore, PosAfter, T);
 
 				FQuat RotBefore = ConvertRotationVmdToUE(Keyframes[KeyBefore].Rotation);
+				RotBefore.Normalize();
 				FQuat RotAfter = ConvertRotationVmdToUE(Keyframes[KeyAfter].Rotation);
+				RotAfter.Normalize();
+
+				// Ensure shortest path SLERP (handle quaternion dual cover)
+				if ((RotBefore | RotAfter) < 0.0f)
+				{
+					RotAfter = -RotAfter;
+				}
+
 				DeltaRotation = FQuat::Slerp(RotBefore, RotAfter, T);
+				DeltaRotation.Normalize();
 			}
 
 			// Apply delta to reference pose
@@ -304,6 +349,7 @@ void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVm
 			// Order: RefPose * Delta (delta applied after ref pose in local space)
 			FVector FinalPosition = RefPose.GetLocation() + DeltaPosition;
 			FQuat FinalRotation = RefPose.GetRotation() * DeltaRotation;
+			FinalRotation.Normalize();
 
 			PositionalKeys[FrameIdx] = FVector3f(FinalPosition);
 			RotationalKeys[FrameIdx] = FQuat4f(FinalRotation);
@@ -329,6 +375,239 @@ void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVm
 		}
 	}
 
+}
+
+void UVmdPipeline::AddBoneAnimationTracksWithIK(UAnimSequence* AnimSequence, const FVmdModel& VmdModel)
+{
+	if (!TargetSkeleton)
+	{
+		return;
+	}
+
+	// Get IK metadata from skeleton
+	UPmxIKMetadataUserData* IKMetadata = GetIKMetadataFromSkeleton();
+	if (!IKMetadata || IKMetadata->IKChains.Num() == 0)
+	{
+		UE_LOG(LogPMXImporter, Warning, TEXT("VmdPipeline: No IK metadata found, falling back to standard bone import"));
+		AddBoneAnimationTracks(AnimSequence, VmdModel);
+		return;
+	}
+
+	IAnimationDataController& Controller = AnimSequence->GetController();
+	const FReferenceSkeleton& RefSkeleton = TargetSkeleton->GetReferenceSkeleton();
+	const TArray<FTransform>& RefBonePose = RefSkeleton.GetRefBonePose();
+
+	UE_LOG(LogPMXImporter, Display, TEXT("VmdPipeline: Starting IK-integrated bone import with %d chains"), IKMetadata->IKChains.Num());
+
+	// Log IK chain details for debugging
+	// Note: Chain.TargetBoneName stores the actual bone name, Chain.TargetBoneIndex is PMX index (not UE index)
+	for (const FPmxIKChainMetadata& Chain : IKMetadata->IKChains)
+	{
+		// Get UE skeleton index from bone name
+		int32 UETargetIndex = RefSkeleton.FindBoneIndex(Chain.TargetBoneName);
+		UE_LOG(LogPMXImporter, Display, TEXT("  IK Chain: %s -> Target: %s (UE idx %d), Links: %d, Loops: %d"),
+			*Chain.IKBoneName.ToString(), *Chain.TargetBoneName.ToString(), UETargetIndex, Chain.Links.Num(), Chain.LoopCount);
+		for (const FPmxIKLinkMetadata& Link : Chain.Links)
+		{
+			int32 UELinkIndex = RefSkeleton.FindBoneIndex(Link.BoneName);
+			UE_LOG(LogPMXImporter, Display, TEXT("    Link: %s (UE idx %d), HasLimits: %d, Min: (%.2f, %.2f, %.2f), Max: (%.2f, %.2f, %.2f)"),
+				*Link.BoneName.ToString(), UELinkIndex, Link.bHasAngleLimits ? 1 : 0,
+				Link.AngleLimitMin.X, Link.AngleLimitMin.Y, Link.AngleLimitMin.Z,
+				Link.AngleLimitMax.X, Link.AngleLimitMax.Y, Link.AngleLimitMax.Z);
+		}
+	}
+
+	// Build bone transforms and parent indices
+	TArray<FTransform> BaseBoneTransforms;
+	TArray<int32> ParentIndices;
+	BuildBoneTransformsFromSkeleton(BaseBoneTransforms, ParentIndices);
+
+	// Initialize IK solver
+	FVmdIKSolver Solver;
+	Solver.Initialize(IKMetadata, BaseBoneTransforms, ParentIndices);
+
+	// Initialize IK state manager
+	FVmdIKStateManager StateManager;
+	StateManager.Initialize(VmdModel.PropertyKeyframes);
+
+	// Collect all bones that need animation tracks
+	// This includes: VMD animated bones + IK chain link bones
+	TSet<FName> BonesToAnimate;
+
+	// Add all VMD animated bones
+	for (const FString& VmdBoneName : VmdModel.GetUniqueBoneNames())
+	{
+		int32 BoneIndex = RefSkeleton.FindBoneIndex(FName(*VmdBoneName));
+		if (BoneIndex != INDEX_NONE)
+		{
+			BonesToAnimate.Add(RefSkeleton.GetBoneName(BoneIndex));
+		}
+	}
+
+	// Add all IK chain link bones (these need to be baked)
+	for (const FPmxIKChainMetadata& Chain : IKMetadata->IKChains)
+	{
+		for (const FPmxIKLinkMetadata& Link : Chain.Links)
+		{
+			int32 BoneIndex = RefSkeleton.FindBoneIndex(Link.BoneName);
+			if (BoneIndex != INDEX_NONE)
+			{
+				BonesToAnimate.Add(Link.BoneName);
+			}
+		}
+	}
+
+	// Get animation duration info
+	const double VmdFrameRate = 30.0;
+	double AnimDuration = VmdModel.GetDurationSeconds();
+	int32 TotalAnimFrames = FMath::CeilToInt(AnimDuration * SampleRate);
+
+	// Create progress dialog
+	FScopedSlowTask SlowTask(2, NSLOCTEXT("VmdPipeline", "BakingIKBones", "Baking IK to FK..."));
+	SlowTask.MakeDialog(true);
+
+	// Prepare storage for all bone keys (indexed by bone, then frame)
+	TMap<FName, TArray<FVector3f>> BonePositionalKeys;
+	TMap<FName, TArray<FQuat4f>> BoneRotationalKeys;
+	TMap<FName, TArray<FVector3f>> BoneScalingKeys;
+
+	for (const FName& BoneName : BonesToAnimate)
+	{
+		BonePositionalKeys.Add(BoneName).SetNum(TotalAnimFrames + 1);
+		BoneRotationalKeys.Add(BoneName).SetNum(TotalAnimFrames + 1);
+		BoneScalingKeys.Add(BoneName).SetNum(TotalAnimFrames + 1);
+	}
+
+	// Convert BonesToAnimate to array for indexed access
+	TArray<FName> BoneNameArray = BonesToAnimate.Array();
+
+	// Pre-build bone index lookup
+	TMap<FName, int32> BoneNameToIndex;
+	for (const FName& BoneName : BoneNameArray)
+	{
+		BoneNameToIndex.Add(BoneName, RefSkeleton.FindBoneIndex(BoneName));
+	}
+
+	SlowTask.EnterProgressFrame(1, NSLOCTEXT("VmdPipeline", "ProcessingFrames", "Processing animation frames (multithreaded)..."));
+
+	// Use atomic counter for progress logging
+	std::atomic<int32> ProcessedFrames(0);
+
+	// Process frames in parallel
+	ParallelFor(TotalAnimFrames + 1, [&](int32 FrameIdx)
+	{
+		double CurrentTime = FrameIdx / SampleRate;
+		float VmdFrame = static_cast<float>(CurrentTime * VmdFrameRate);
+
+		// Get VMD bone transforms at this frame
+		TMap<FName, FTransform> VmdBoneDeltas;
+		InterpolateVmdBoneTransforms(VmdModel, VmdFrame, VmdBoneDeltas);
+
+		// Start with reference pose (copy for this thread)
+		TArray<FTransform> CurrentTransforms = BaseBoneTransforms;
+
+		// Apply VMD deltas to all animated bones
+		for (const auto& Pair : VmdBoneDeltas)
+		{
+			const int32* BoneIndexPtr = BoneNameToIndex.Find(Pair.Key);
+			int32 BoneIndex = BoneIndexPtr ? *BoneIndexPtr : RefSkeleton.FindBoneIndex(Pair.Key);
+			if (BoneIndex != INDEX_NONE && CurrentTransforms.IsValidIndex(BoneIndex))
+			{
+				FTransform& LocalTransform = CurrentTransforms[BoneIndex];
+				const FTransform& Delta = Pair.Value;
+
+				// Apply delta: position is additive, rotation is multiplicative
+				FQuat NewRotation = LocalTransform.GetRotation() * Delta.GetRotation();
+				NewRotation.Normalize();
+				LocalTransform.SetRotation(NewRotation);
+				LocalTransform.AddToTranslation(Delta.GetTranslation());
+			}
+		}
+
+		// Get IK states at this frame
+		uint32 VmdFrameInt = static_cast<uint32>(FMath::RoundToInt(VmdFrame));
+		TMap<FName, bool> IKStates = StateManager.GetIKStatesAtFrame(VmdFrameInt);
+
+		// Calculate IK bone world positions for the solver
+		TMap<FName, FTransform> IKBoneWorldTransforms;
+		for (const FPmxIKChainMetadata& Chain : IKMetadata->IKChains)
+		{
+			int32 IKBoneIndex = RefSkeleton.FindBoneIndex(Chain.IKBoneName);
+			if (IKBoneIndex != INDEX_NONE && CurrentTransforms.IsValidIndex(IKBoneIndex))
+			{
+				// Calculate world transform for IK bone
+				FTransform WorldTransform = CurrentTransforms[IKBoneIndex];
+				int32 ParentIdx = RefSkeleton.GetParentIndex(IKBoneIndex);
+				while (ParentIdx != INDEX_NONE)
+				{
+					WorldTransform = WorldTransform * CurrentTransforms[ParentIdx];
+					ParentIdx = RefSkeleton.GetParentIndex(ParentIdx);
+				}
+				IKBoneWorldTransforms.Add(Chain.IKBoneName, WorldTransform);
+			}
+		}
+
+		// Create thread-local IK solver (IK solver state is modified during solving)
+		FVmdIKSolver LocalSolver;
+		LocalSolver.Initialize(IKMetadata, BaseBoneTransforms, ParentIndices);
+
+		// Solve IK chains - this modifies CurrentTransforms in place
+		if (LocalSolver.IsInitialized())
+		{
+			LocalSolver.SolveFrame(IKBoneWorldTransforms, IKStates, CurrentTransforms);
+		}
+
+		// Store results for all bones we're animating
+		for (const FName& BoneName : BoneNameArray)
+		{
+			const int32* BoneIndexPtr = BoneNameToIndex.Find(BoneName);
+			if (BoneIndexPtr && *BoneIndexPtr != INDEX_NONE && CurrentTransforms.IsValidIndex(*BoneIndexPtr))
+			{
+				const FTransform& FinalTransform = CurrentTransforms[*BoneIndexPtr];
+
+				BonePositionalKeys[BoneName][FrameIdx] = FVector3f(FinalTransform.GetLocation());
+				BoneRotationalKeys[BoneName][FrameIdx] = FQuat4f(FinalTransform.GetRotation());
+				BoneScalingKeys[BoneName][FrameIdx] = FVector3f(FinalTransform.GetScale3D());
+			}
+		}
+
+		// Log progress occasionally
+		int32 Processed = ++ProcessedFrames;
+		if (Processed % 500 == 0)
+		{
+			UE_LOG(LogPMXImporter, Display, TEXT("VmdPipeline: Processed %d / %d frames"), Processed, TotalAnimFrames + 1);
+		}
+	});
+
+	SlowTask.EnterProgressFrame(1, NSLOCTEXT("VmdPipeline", "AddingTracks", "Adding bone tracks to animation..."));
+
+	// Now add all bone tracks to the animation
+	for (const FName& BoneName : BonesToAnimate)
+	{
+		// Remove existing track if present
+		TArray<FName> ExistingTrackNames;
+		Controller.GetModel()->GetBoneTrackNames(ExistingTrackNames);
+		if (ExistingTrackNames.Contains(BoneName))
+		{
+			Controller.RemoveBoneTrack(BoneName, false);
+		}
+
+		// Add bone track
+		Controller.AddBoneCurve(BoneName, false);
+
+		// Set keys
+		const TArray<FVector3f>& PosKeys = BonePositionalKeys[BoneName];
+		const TArray<FQuat4f>& RotKeys = BoneRotationalKeys[BoneName];
+		const TArray<FVector3f>& ScaleKeys = BoneScalingKeys[BoneName];
+
+		if (PosKeys.Num() > 0)
+		{
+			Controller.SetBoneTrackKeys(BoneName, PosKeys, RotKeys, ScaleKeys, false);
+		}
+	}
+
+	UE_LOG(LogPMXImporter, Display, TEXT("VmdPipeline: Completed IK-integrated bone import (%d bones, %d frames)"),
+		BonesToAnimate.Num(), TotalAnimFrames + 1);
 }
 
 void UVmdPipeline::AddMorphTargetCurves(UAnimSequence* AnimSequence, const FVmdModel& VmdModel)
@@ -375,16 +654,15 @@ FVector UVmdPipeline::ConvertPositionVmdToUE(const FVector& VmdPosition) const
 {
 	// VMD/PMX: Right-handed Y-up (X right, Y up, Z forward)
 	// UE: Left-handed Z-up (X forward, Y right, Z up)
-	// Apply X-axis 90 degree rotation (same as PmxNodeBuilder)
-	// After rotation: X stays X, Y becomes -Z, Z becomes Y
-	return FVector(VmdPosition.X, -VmdPosition.Z, VmdPosition.Y) * Scale;
+	// Same as PmxTranslator::ConvertVectorPmxToUE: (X, Z, Y)
+	return FVector(VmdPosition.X, VmdPosition.Z, VmdPosition.Y) * Scale;
 }
 
 FVector UVmdPipeline::ConvertPositionDeltaVmdToUE(const FVector& VmdDelta) const
 {
 	// For bone animation deltas, apply same coordinate conversion with scale
-	// VMD position deltas are in MMD units (1 unit = 8cm typically)
-	return FVector(VmdDelta.X, -VmdDelta.Z, VmdDelta.Y) * Scale;
+	// Same as PmxTranslator::ConvertVectorPmxToUE: (X, Z, Y)
+	return FVector(VmdDelta.X, VmdDelta.Z, VmdDelta.Y) * Scale;
 }
 
 FQuat UVmdPipeline::ConvertRotationVmdToUE(const FQuat& VmdRotation) const
@@ -393,4 +671,116 @@ FQuat UVmdPipeline::ConvertRotationVmdToUE(const FQuat& VmdRotation) const
 	// Same axis swap as PmxTranslator::ConvertQuaternionPmxToUE
 	// (X, Y, Z, W) -> (X, Z, Y, W)
 	return FQuat(VmdRotation.X, VmdRotation.Z, VmdRotation.Y, VmdRotation.W);
+}
+
+UPmxIKMetadataUserData* UVmdPipeline::GetIKMetadataFromSkeleton() const
+{
+	if (!TargetSkeleton)
+	{
+		return nullptr;
+	}
+
+	// Look for IK metadata in skeleton's asset user data
+	return TargetSkeleton->GetAssetUserData<UPmxIKMetadataUserData>();
+}
+
+void UVmdPipeline::BuildBoneTransformsFromSkeleton(TArray<FTransform>& OutLocalTransforms, TArray<int32>& OutParentIndices) const
+{
+	OutLocalTransforms.Empty();
+	OutParentIndices.Empty();
+
+	if (!TargetSkeleton)
+	{
+		return;
+	}
+
+	const FReferenceSkeleton& RefSkeleton = TargetSkeleton->GetReferenceSkeleton();
+	int32 NumBones = RefSkeleton.GetNum();
+
+	OutLocalTransforms.Reserve(NumBones);
+	OutParentIndices.Reserve(NumBones);
+
+	for (int32 BoneIndex = 0; BoneIndex < NumBones; ++BoneIndex)
+	{
+		OutLocalTransforms.Add(RefSkeleton.GetRefBonePose()[BoneIndex]);
+		OutParentIndices.Add(RefSkeleton.GetParentIndex(BoneIndex));
+	}
+}
+
+void UVmdPipeline::InterpolateVmdBoneTransforms(const FVmdModel& VmdModel, float Frame, TMap<FName, FTransform>& OutBoneTransforms) const
+{
+	OutBoneTransforms.Empty();
+
+	// Get unique bone names
+	TSet<FString> BoneNames = VmdModel.GetUniqueBoneNames();
+
+	for (const FString& BoneName : BoneNames)
+	{
+		// Get keyframes for this bone (already sorted)
+		TArray<FVmdBoneKeyframe> Keyframes = VmdModel.GetBoneKeyframes(BoneName);
+
+		if (Keyframes.Num() == 0)
+		{
+			continue;
+		}
+
+		// Find surrounding keyframes
+		int32 KeyBefore = 0;
+		int32 KeyAfter = 0;
+
+		for (int32 i = 0; i < Keyframes.Num(); ++i)
+		{
+			if (Keyframes[i].FrameNumber <= Frame)
+			{
+				KeyBefore = i;
+			}
+			if (Keyframes[i].FrameNumber >= Frame)
+			{
+				KeyAfter = i;
+				break;
+			}
+			KeyAfter = i;
+		}
+
+		FVector Position;
+		FQuat Rotation;
+
+		if (KeyBefore == KeyAfter || Keyframes[KeyBefore].FrameNumber == Keyframes[KeyAfter].FrameNumber)
+		{
+			// Exact keyframe or single keyframe
+			Position = ConvertPositionDeltaVmdToUE(Keyframes[KeyBefore].Position);
+			Rotation = ConvertRotationVmdToUE(Keyframes[KeyBefore].Rotation);
+			Rotation.Normalize();
+		}
+		else
+		{
+			// Interpolate between keyframes
+			float T = (Frame - Keyframes[KeyBefore].FrameNumber) /
+				static_cast<float>(Keyframes[KeyAfter].FrameNumber - Keyframes[KeyBefore].FrameNumber);
+
+			// TODO: Use bezier interpolation from VMD data
+			FVector PosBefore = ConvertPositionDeltaVmdToUE(Keyframes[KeyBefore].Position);
+			FVector PosAfter = ConvertPositionDeltaVmdToUE(Keyframes[KeyAfter].Position);
+			FQuat RotBefore = ConvertRotationVmdToUE(Keyframes[KeyBefore].Rotation);
+			RotBefore.Normalize();
+			FQuat RotAfter = ConvertRotationVmdToUE(Keyframes[KeyAfter].Rotation);
+			RotAfter.Normalize();
+
+			// Ensure shortest path SLERP (handle quaternion dual cover)
+			if ((RotBefore | RotAfter) < 0.0f)
+			{
+				RotAfter = -RotAfter;
+			}
+
+			Position = FMath::Lerp(PosBefore, PosAfter, T);
+			Rotation = FQuat::Slerp(RotBefore, RotAfter, T);
+			Rotation.Normalize();
+		}
+
+		FTransform BoneTransform;
+		BoneTransform.SetLocation(Position);
+		BoneTransform.SetRotation(Rotation);
+
+		OutBoneTransforms.Add(FName(*BoneName), BoneTransform);
+	}
 }

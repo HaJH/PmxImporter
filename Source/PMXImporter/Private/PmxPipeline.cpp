@@ -4,6 +4,7 @@
 #include "LogPMXImporter.h"
 #include "PmxPhysicsBuilder.h"
 #include "PmxStructs.h"
+#include "PmxIKMetadata.h"
 
 #include "InterchangeSourceData.h"
 #include "Nodes/InterchangeBaseNodeContainer.h"
@@ -627,6 +628,124 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 				ApplySwitch(TEXT("pmx.edge.draw"));
 
 				UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Configured MaterialInstance '%s' from Node '%s'"), *MI->GetName(), *MaterialNode->GetDisplayLabel());
+			}
+		}
+	}
+
+	// Handle SkeletalMesh creation - Store IK metadata for VMD import
+	if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(CreatedAsset))
+	{
+		// Get cached PMX model data
+		const TSharedPtr<FPmxModel>* FoundModel = UPmxTranslator::MeshPayloadCache.Find(TEXT("PMX_GEOMETRY"));
+		if (FoundModel && FoundModel->IsValid())
+		{
+			const FPmxModel& PmxModel = **FoundModel;
+
+			// Get skeleton first - we need to create IKMetadata as its subobject
+			USkeleton* Skeleton = SkeletalMesh->GetSkeleton();
+			if (!Skeleton)
+			{
+				UE_LOG(LogPMXImporter, Warning, TEXT("UPmxPipeline: No skeleton found for SkeletalMesh '%s'"), *SkeletalMesh->GetName());
+			}
+			else
+			{
+				// Remove existing IK metadata if any (for reimport)
+				if (UPmxIKMetadataUserData* ExistingMetadata = Skeleton->GetAssetUserData<UPmxIKMetadataUserData>())
+				{
+					Skeleton->RemoveUserDataOfClass(UPmxIKMetadataUserData::StaticClass());
+				}
+
+				// Create IK metadata as subobject of Skeleton (IMPORTANT: must be owned by Skeleton to avoid cross-package reference)
+				UPmxIKMetadataUserData* IKMetadata = NewObject<UPmxIKMetadataUserData>(Skeleton);
+				IKMetadata->ModelName = PmxModel.Header.ModelName;
+
+				// Build bone name to UE skeleton index mapping
+				// IMPORTANT: Use UE skeleton indices, not PMX bone indices!
+				const FReferenceSkeleton& RefSkeleton = Skeleton->GetReferenceSkeleton();
+				for (int32 BoneIdx = 0; BoneIdx < PmxModel.Bones.Num(); ++BoneIdx)
+				{
+					const FPmxBone& Bone = PmxModel.Bones[BoneIdx];
+					FName BoneName(*Bone.Name);
+					int32 UEBoneIndex = RefSkeleton.FindBoneIndex(BoneName);
+					if (UEBoneIndex != INDEX_NONE)
+					{
+						IKMetadata->BoneNameToIndex.Add(BoneName, UEBoneIndex);
+					}
+				}
+
+				// Extract IK chains
+				for (int32 BoneIdx = 0; BoneIdx < PmxModel.Bones.Num(); ++BoneIdx)
+				{
+					const FPmxBone& Bone = PmxModel.Bones[BoneIdx];
+
+					// Check if this bone is an IK bone (has IK links)
+					if (Bone.IKLinks.Num() > 0 && Bone.IKTargetBoneIndex >= 0)
+					{
+						FPmxIKChainMetadata Chain;
+						Chain.IKBoneName = FName(*Bone.Name);
+						Chain.IKBoneIndex = BoneIdx;
+						Chain.LoopCount = Bone.IKLoopCount;
+						Chain.LimitAngle = Bone.IKLimitAngle;
+
+						// Get target bone
+						if (Bone.IKTargetBoneIndex >= 0 && Bone.IKTargetBoneIndex < PmxModel.Bones.Num())
+						{
+							Chain.TargetBoneName = FName(*PmxModel.Bones[Bone.IKTargetBoneIndex].Name);
+							Chain.TargetBoneIndex = Bone.IKTargetBoneIndex;
+						}
+
+						// Extract IK links
+						for (const FPmxBone::FPmxIKLink& Link : Bone.IKLinks)
+						{
+							FPmxIKLinkMetadata LinkMeta;
+							if (Link.BoneIndex >= 0 && Link.BoneIndex < PmxModel.Bones.Num())
+							{
+								LinkMeta.BoneName = FName(*PmxModel.Bones[Link.BoneIndex].Name);
+								LinkMeta.BoneIndex = Link.BoneIndex;
+								LinkMeta.bHasAngleLimits = (Link.AngleLimitFlag != 0);
+								LinkMeta.AngleLimitMin = FVector(Link.LimitMin);
+								LinkMeta.AngleLimitMax = FVector(Link.LimitMax);
+								Chain.Links.Add(LinkMeta);
+							}
+						}
+
+						IKMetadata->IKChains.Add(Chain);
+						UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Found IK chain '%s' -> '%s' with %d links"),
+							*Bone.Name, *Chain.TargetBoneName.ToString(), Chain.Links.Num());
+					}
+				}
+
+				// Extract additional bone info (rotation/location inheritance)
+				for (int32 BoneIdx = 0; BoneIdx < PmxModel.Bones.Num(); ++BoneIdx)
+				{
+					const FPmxBone& Bone = PmxModel.Bones[BoneIdx];
+
+					// Check for additional rotation/location (flags: 0x0100 = additional rotation, 0x0200 = additional location)
+					bool bHasAdditional = (Bone.BoneFlags & 0x0100) || (Bone.BoneFlags & 0x0200);
+					if (bHasAdditional && Bone.AdditionalParentIndex >= 0)
+					{
+						FPmxAdditionalBoneMetadata AdditionalMeta;
+						AdditionalMeta.BoneName = FName(*Bone.Name);
+						AdditionalMeta.BoneIndex = BoneIdx;
+						AdditionalMeta.bHasAdditionalRotation = (Bone.BoneFlags & 0x0100) != 0;
+						AdditionalMeta.bHasAdditionalLocation = (Bone.BoneFlags & 0x0200) != 0;
+						AdditionalMeta.Ratio = Bone.AdditionalRatio;
+
+						if (Bone.AdditionalParentIndex >= 0 && Bone.AdditionalParentIndex < PmxModel.Bones.Num())
+						{
+							AdditionalMeta.ParentBoneName = FName(*PmxModel.Bones[Bone.AdditionalParentIndex].Name);
+							AdditionalMeta.ParentBoneIndex = Bone.AdditionalParentIndex;
+						}
+
+						IKMetadata->AdditionalBones.Add(AdditionalMeta);
+					}
+				}
+
+				// Add metadata to skeleton
+				Skeleton->AddAssetUserData(IKMetadata);
+				Skeleton->MarkPackageDirty();
+				UE_LOG(LogPMXImporter, Display, TEXT("UPmxPipeline: Stored IK metadata (%d chains, %d additional bones) for skeleton '%s'"),
+					IKMetadata->IKChains.Num(), IKMetadata->AdditionalBones.Num(), *Skeleton->GetName());
 			}
 		}
 	}

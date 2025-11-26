@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright (c) 2025 Jeonghyeon Ha. All Rights Reserved.
 
 #include "VmdTranslator.h"
 #include "VmdReader.h"
@@ -357,17 +357,19 @@ UE::Interchange::FAnimationPayloadData UVmdTranslator::BuildMorphAnimationPayloa
 
 FVector UVmdTranslator::ConvertPositionVmdToUE(const FVector& VmdPosition) const
 {
-	// VMD: Right-handed Y-up (X right, Y up, Z forward)
+	// VMD/PMX: Right-handed Y-up (X right, Y up, Z forward)
 	// UE: Left-handed Z-up (X forward, Y right, Z up)
-	// Conversion: UE.X = VMD.X, UE.Y = VMD.Z, UE.Z = VMD.Y
-	return FVector(VmdPosition.X, VmdPosition.Z, VmdPosition.Y) * ImportOptions.Scale;
+	// Apply X-axis 90 degree rotation (same as PmxNodeBuilder/VmdPipeline)
+	// After rotation: X stays X, Y becomes -Z, Z becomes Y
+	return FVector(VmdPosition.X, -VmdPosition.Z, VmdPosition.Y) * ImportOptions.Scale;
 }
 
 FQuat UVmdTranslator::ConvertRotationVmdToUE(const FQuat& VmdRotation) const
 {
-	// Convert quaternion from Y-up right-handed to Z-up left-handed
-	// Similar axis swap as position, plus handedness change
-	return FQuat(VmdRotation.X, VmdRotation.Z, VmdRotation.Y, -VmdRotation.W);
+	// Convert quaternion from VMD/PMX to UE coordinate system
+	// Same axis swap as PmxTranslator::ConvertQuaternionPmxToUE and VmdPipeline
+	// (X, Y, Z, W) -> (X, Z, Y, W) - W sign preserved
+	return FQuat(VmdRotation.X, VmdRotation.Z, VmdRotation.Y, VmdRotation.W);
 }
 
 FRotator UVmdTranslator::ConvertEulerVmdToUE(const FVector& VmdEulerRad) const

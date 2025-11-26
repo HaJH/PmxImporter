@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright (c) 2025 Jeonghyeon Ha. All Rights Reserved.
 
 #pragma once
 
@@ -11,6 +11,22 @@
 class USkeleton;
 class UAnimSequence;
 class IAnimationDataController;
+class UPmxIKMetadataUserData;
+class FVmdIKSolver;
+class FVmdIKStateManager;
+
+/**
+ * IK bake quality setting
+ */
+UENUM(BlueprintType)
+enum class EVmdIKBakeQuality : uint8
+{
+	/** Only bake at VMD keyframes (faster, smaller file size, relies on UE interpolation) */
+	KeyframesOnly UMETA(DisplayName = "Keyframes Only"),
+
+	/** Bake every frame (higher quality, larger file size) */
+	AllFrames UMETA(DisplayName = "All Frames")
+};
 
 /**
  * VMD Import Pipeline
@@ -57,6 +73,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VMD|Animation", meta = (ClampMin = "1.0", ClampMax = "120.0"))
 	double SampleRate = 30.0;
 
+	// =============================================
+	// IK Baking Options
+	// =============================================
+
+	/** Bake IK animation to FK. Required for proper leg/arm animation. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VMD|IK Baking")
+	bool bBakeIKToFK = true;
+
+	/** IK bake quality. Higher quality produces smoother animation but larger file size. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VMD|IK Baking", meta = (EditCondition = "bBakeIKToFK"))
+	EVmdIKBakeQuality IKBakeQuality = EVmdIKBakeQuality::KeyframesOnly;
+
 private:
 	/** Configure AnimSequence factory node with skeleton and settings */
 	void ConfigureAnimSequenceNode(UInterchangeBaseNodeContainer* BaseNodeContainer);
@@ -66,6 +94,9 @@ private:
 
 	/** Add bone animation tracks to AnimSequence */
 	void AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVmdModel& VmdModel);
+
+	/** Add bone animation tracks with IK baking integrated */
+	void AddBoneAnimationTracksWithIK(UAnimSequence* AnimSequence, const FVmdModel& VmdModel);
 
 	/** Add morph target curves to AnimSequence */
 	void AddMorphTargetCurves(UAnimSequence* AnimSequence, const FVmdModel& VmdModel);
@@ -78,6 +109,15 @@ private:
 
 	/** Convert VMD rotation (quaternion) to UE coordinate system */
 	FQuat ConvertRotationVmdToUE(const FQuat& VmdRotation) const;
+
+	/** Get IK metadata from skeleton */
+	UPmxIKMetadataUserData* GetIKMetadataFromSkeleton() const;
+
+	/** Build bone local transforms from reference pose */
+	void BuildBoneTransformsFromSkeleton(TArray<FTransform>& OutLocalTransforms, TArray<int32>& OutParentIndices) const;
+
+	/** Interpolate VMD bone keyframes at a specific frame */
+	void InterpolateVmdBoneTransforms(const FVmdModel& VmdModel, float Frame, TMap<FName, FTransform>& OutBoneTransforms) const;
 
 	/** Cached source file path for retrieving VMD data */
 	mutable FString CachedSourceFilePath;
