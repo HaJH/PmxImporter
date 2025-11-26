@@ -5,6 +5,7 @@
 #include "InterchangeManager.h"
 #include "InterchangeProjectSettings.h"
 #include "PmxTranslator.h"
+#include "PmxPipeline.h"
 
 DEFINE_LOG_CATEGORY(LogPMXImporter);
 
@@ -27,6 +28,9 @@ public:
 
 	virtual void ShutdownModule() override
 	{
+		// Note: DefaultPipelineInstance cleanup is skipped during engine shutdown
+		// AddToRoot() objects are automatically cleaned up by GC during exit
+
 		// Clear static caches
 		UPmxTranslator::MeshPayloadCache.Empty();
 		UPmxTranslator::PhysicsPayloadCache.Empty();
@@ -35,6 +39,7 @@ public:
 	}
 
 private:
+	TObjectPtr<UPmxPipeline> DefaultPipelineInstance;
 	void RegisterPipelines()
 	{
 #if WITH_EDITOR
@@ -47,24 +52,25 @@ private:
 
 		UE_LOG(LogPMXImporter, Display, TEXT("TranslatorClassPath: %s"), *TranslatorClassPath.ToString());
 
+		// Dynamically create pipeline instance at runtime (no Blueprint asset dependency)
+		const FString PackagePath = TEXT("/PMXImporter/Pipelines/DefaultPmxPipeline");
+		UPackage* PipelinePackage = CreatePackage(*PackagePath);
+		PipelinePackage->SetPackageFlags(PKG_CompiledIn);
+
+		DefaultPipelineInstance = NewObject<UPmxPipeline>(
+			PipelinePackage,
+			UPmxPipeline::StaticClass(),
+			TEXT("DefaultPmxPipeline"),
+			RF_Public | RF_Standalone
+		);
+		DefaultPipelineInstance->AddToRoot();
+
 		FInterchangeTranslatorPipelines TranslatorPipelines;
 		TranslatorPipelines.Translator = TranslatorClassPath;
-		// Reference the Blueprint pipeline asset in the plugin's Content folder
-		// This asset must be created in UE Editor: Right-click → Miscellaneous → Data Asset → PmxPipeline
-		FSoftObjectPath PipelinePath(TEXT("/PMXImporter/Pipelines/DefaultPmxPipeline.DefaultPmxPipeline"));
+		FSoftObjectPath PipelinePath(DefaultPipelineInstance);
 		TranslatorPipelines.Pipelines.Add(PipelinePath);
 
-		UE_LOG(LogPMXImporter, Display, TEXT("Pipeline path: %s"), *PipelinePath.ToString());
-
-		// Verify the pipeline asset can be loaded
-		if (UObject* LoadedPipeline = PipelinePath.TryLoad())
-		{
-			UE_LOG(LogPMXImporter, Display, TEXT("Pipeline asset loaded successfully: %s"), *LoadedPipeline->GetClass()->GetName());
-		}
-		else
-		{
-			UE_LOG(LogPMXImporter, Warning, TEXT("Failed to load pipeline asset at: %s"), *PipelinePath.ToString());
-		}
+		UE_LOG(LogPMXImporter, Display, TEXT("Pipeline created dynamically: %s"), *PipelinePath.ToString());
 
 		// Get project settings
 		UInterchangeProjectSettings* ProjectSettings = GetMutableDefault<UInterchangeProjectSettings>();
