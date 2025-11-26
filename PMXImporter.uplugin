@@ -1,9 +1,9 @@
 {
 	"FileVersion": 3,
 	"Version": 1,
-	"VersionName": "1.1",
-    "EngineVersion": "5.6.0",
-    "FriendlyName": "PMX Importer",
+	"VersionName": "1.2",
+	"EngineVersion": "5.6.0",
+	"FriendlyName": "PMX Importer",
 	"Description": "Import PMX (MMD) models into Unreal Engine using Interchange.",
 	"Category": "Importers",
 	"CanContainContent": true,
