@@ -247,12 +247,6 @@ bool FVmdReader::LoadFromData(const uint8* Data, int64 DataSize, FVmdModel& OutM
 		}
 	}
 
-	UE_LOG(LogVmdReader, Log, TEXT("VMD loaded: %s, Bones: %d keyframes (%d unique), Morphs: %d keyframes (%d unique), Camera: %d keyframes"),
-		*OutModel.Header.ModelName,
-		OutModel.BoneKeyframes.Num(), OutModel.GetUniqueBoneNames().Num(),
-		OutModel.MorphKeyframes.Num(), OutModel.GetUniqueMorphNames().Num(),
-		OutModel.CameraKeyframes.Num());
-
 	return true;
 }
 
@@ -292,10 +286,6 @@ bool FVmdReader::ParseHeader(FBinaryReader& Reader, FVmdModel& OutModel)
 		SetError(TEXT("Failed to read model name"));
 		return false;
 	}
-
-	UE_LOG(LogVmdReader, Log, TEXT("VMD Header: Version=%s, Model=%s"),
-		OutModel.Header.bIsVersion2 ? TEXT("2") : TEXT("1"),
-		*OutModel.Header.ModelName);
 
 	return true;
 }

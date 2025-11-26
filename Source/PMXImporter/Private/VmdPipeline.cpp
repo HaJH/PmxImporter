@@ -41,12 +41,7 @@ void UVmdPipeline::ExecutePipeline(UInterchangeBaseNodeContainer* BaseNodeContai
 	// Check if skeleton is assigned
 	if (!TargetSkeleton)
 	{
-		UE_LOG(LogPMXImporter, Warning, TEXT("VmdPipeline: No target skeleton assigned. AnimSequence import will fail."));
-		UE_LOG(LogPMXImporter, Warning, TEXT("VmdPipeline: Please assign a skeleton in the import dialog."));
-	}
-	else
-	{
-		UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: Using skeleton '%s'"), *TargetSkeleton->GetName());
+		UE_LOG(LogPMXImporter, Warning, TEXT("VmdPipeline: No target skeleton assigned. Please assign a skeleton in the import dialog."));
 	}
 
 	// Configure AnimSequence nodes
@@ -89,9 +84,6 @@ void UVmdPipeline::ConfigureAnimSequenceNode(UInterchangeBaseNodeContainer* Base
 		// IMPORTANT: Disable this factory node so it doesn't try to create a new skeleton
 		// AnimSequenceFactory will still use the ReferenceObject to get the existing skeleton
 		SkeletonFactoryNode->SetEnabled(false);
-
-		UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: Created SkeletonFactoryNode '%s' referencing '%s' (disabled)"),
-			*SkeletonNodeUid, *SkeletonPath.ToString());
 	}
 
 	// Find all AnimSequence factory nodes
@@ -108,8 +100,6 @@ void UVmdPipeline::ConfigureAnimSequenceNode(UInterchangeBaseNodeContainer* Base
 			continue;
 		}
 
-		UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: Configuring AnimSequence node '%s'"), *NodeUid);
-
 		// Set skeleton factory node UID (required by AnimSequence factory)
 		AnimNode->SetCustomSkeletonFactoryNodeUid(SkeletonNodeUid);
 
@@ -119,9 +109,6 @@ void UVmdPipeline::ConfigureAnimSequenceNode(UInterchangeBaseNodeContainer* Base
 
 		// Add dependency on skeleton factory node
 		AnimNode->AddFactoryDependencyUid(SkeletonNodeUid);
-
-		UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: Set skeleton UID '%s' and path '%s'"),
-			*SkeletonNodeUid, *SkeletonPath.ToString());
 
 		// Configure bone track import
 		AnimNode->SetCustomImportBoneTracks(bImportBoneAnimation);
@@ -141,9 +128,6 @@ void UVmdPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 	{
 		return;
 	}
-
-	UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: Post-import for '%s' (Type: %s)"),
-		*CreatedAsset->GetName(), *CreatedAsset->GetClass()->GetName());
 
 	// Check if this is an AnimSequence
 	UAnimSequence* AnimSequence = Cast<UAnimSequence>(CreatedAsset);
@@ -167,11 +151,6 @@ void UVmdPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 	}
 
 	const FVmdModel& VmdModel = **CachedModel;
-
-	UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: Populating AnimSequence '%s' with VMD data (Bones: %d, Morphs: %d)"),
-		*AnimSequence->GetName(),
-		VmdModel.GetUniqueBoneNames().Num(),
-		VmdModel.GetUniqueMorphNames().Num());
 
 	// Populate the AnimSequence with actual animation data
 	PopulateAnimSequenceData(AnimSequence, VmdModel);
@@ -202,9 +181,6 @@ void UVmdPipeline::PopulateAnimSequenceData(UAnimSequence* AnimSequence, const F
 	int32 NumFrames = FMath::CeilToInt(AlignedDuration * SampleRate);
 	Controller.SetNumberOfFrames(NumFrames, false);
 
-	UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: Animation duration=%.2fs, frames=%d, sampleRate=%.1f"),
-		AlignedDuration, NumFrames, SampleRate);
-
 	// Add bone animation tracks
 	if (bImportBoneAnimation)
 	{
@@ -223,8 +199,6 @@ void UVmdPipeline::PopulateAnimSequenceData(UAnimSequence* AnimSequence, const F
 	// Notify asset modified
 	AnimSequence->PostEditChange();
 	AnimSequence->MarkPackageDirty();
-
-	UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: AnimSequence population complete"));
 }
 
 void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVmdModel& VmdModel)
@@ -243,13 +217,6 @@ void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVm
 	double AnimDuration = VmdModel.GetDurationSeconds();
 	int32 TotalAnimFrames = FMath::CeilToInt(AnimDuration * SampleRate);
 
-	int32 MatchedBones = 0;
-	int32 UnmatchedBones = 0;
-	int32 TotalKeyframes = 0;
-
-	// Collect unmatched bone names for logging
-	TArray<FString> UnmatchedBoneNames;
-
 	// Iterate through unique bone names in VMD
 	for (const FString& VmdBoneName : VmdModel.GetUniqueBoneNames())
 	{
@@ -257,13 +224,10 @@ void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVm
 		int32 BoneIndex = RefSkeleton.FindBoneIndex(FName(*VmdBoneName));
 		if (BoneIndex == INDEX_NONE)
 		{
-			UnmatchedBones++;
-			UnmatchedBoneNames.Add(VmdBoneName);
 			continue;
 		}
 
 		FName BoneName = RefSkeleton.GetBoneName(BoneIndex);
-		MatchedBones++;
 
 		// Get keyframes for this bone
 		TArray<FVmdBoneKeyframe> Keyframes = VmdModel.GetBoneKeyframes(VmdBoneName);
@@ -271,8 +235,6 @@ void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVm
 		{
 			continue;
 		}
-
-		TotalKeyframes += Keyframes.Num();
 
 		// Get reference pose for this bone (local space)
 		const FTransform& RefPose = RefBonePose[BoneIndex];
@@ -367,25 +329,11 @@ void UVmdPipeline::AddBoneAnimationTracks(UAnimSequence* AnimSequence, const FVm
 		}
 	}
 
-	// Log unmatched bones
-	if (UnmatchedBoneNames.Num() > 0)
-	{
-		UE_LOG(LogPMXImporter, Warning, TEXT("VmdPipeline: %d VMD bones not found in skeleton:"), UnmatchedBoneNames.Num());
-		for (const FString& Name : UnmatchedBoneNames)
-		{
-			UE_LOG(LogPMXImporter, Warning, TEXT("  - %s"), *Name);
-		}
-	}
-
-	UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: Added %d bone tracks (sampled to %d frames), %d VMD bones unmatched"),
-		MatchedBones, TotalAnimFrames, UnmatchedBones);
 }
 
 void UVmdPipeline::AddMorphTargetCurves(UAnimSequence* AnimSequence, const FVmdModel& VmdModel)
 {
 	IAnimationDataController& Controller = AnimSequence->GetController();
-
-	int32 AddedCurves = 0;
 
 	for (const FString& MorphName : VmdModel.GetUniqueMorphNames())
 	{
@@ -419,11 +367,8 @@ void UVmdPipeline::AddMorphTargetCurves(UAnimSequence* AnimSequence, const FVmdM
 
 			// Set curve keys
 			Controller.SetCurveKeys(CurveId, RichCurve.GetConstRefOfKeys(), false);
-			AddedCurves++;
 		}
 	}
-
-	UE_LOG(LogPMXImporter, Log, TEXT("VmdPipeline: Added %d morph target curves"), AddedCurves);
 }
 
 FVector UVmdPipeline::ConvertPositionVmdToUE(const FVector& VmdPosition) const

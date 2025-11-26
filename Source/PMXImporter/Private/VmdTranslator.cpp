@@ -60,24 +60,16 @@ bool UVmdTranslator::Translate(UInterchangeBaseNodeContainer& BaseNodeContainer)
 	}
 
 	SourceFilePath = SourceData->GetFilename();
-	UE_LOG(LogPMXImporter, Log, TEXT("VMD Translator: Starting translation of %s"), *SourceFilePath);
 
 	// Load VMD file
 	CachedVmdModel = GetOrLoadVmdModel(SourceFilePath);
 	if (!CachedVmdModel.IsValid())
 	{
-		UE_LOG(LogPMXImporter, Error, TEXT("VMD Translator: Failed to load VMD file"));
+		UE_LOG(LogPMXImporter, Error, TEXT("VMD Translator: Failed to load VMD file: %s"), *SourceFilePath);
 		return false;
 	}
 
 	const FVmdModel& VmdModel = *CachedVmdModel;
-
-	UE_LOG(LogPMXImporter, Log, TEXT("VMD loaded: Model=%s, Duration=%.2fs, Bones=%d, Morphs=%d, Camera=%d"),
-		*VmdModel.Header.ModelName,
-		VmdModel.GetDurationSeconds(),
-		VmdModel.GetUniqueBoneNames().Num(),
-		VmdModel.GetUniqueMorphNames().Num(),
-		VmdModel.CameraKeyframes.Num());
 
 	// Read import options from SourceNode custom attributes
 	// (These would be set by a VMD pipeline, similar to PmxPipeline)
@@ -177,8 +169,6 @@ void UVmdTranslator::CreateAnimSequenceNode(
 	}
 
 	BaseNodeContainer.AddNode(AnimNode);
-
-	UE_LOG(LogPMXImporter, Log, TEXT("VMD Translator: Created AnimSequence node '%s'"), *AnimName);
 }
 
 void UVmdTranslator::CreateCameraAnimationNodes(
@@ -212,16 +202,11 @@ void UVmdTranslator::CreateCameraAnimationNodes(
 	// For now, we'll create placeholder nodes
 
 	BaseNodeContainer.AddNode(TrackSetNode);
-
-	UE_LOG(LogPMXImporter, Log, TEXT("VMD Translator: Created camera animation track set '%s' with %d keyframes"),
-		*BaseName, VmdModel.CameraKeyframes.Num());
 }
 
 TArray<UE::Interchange::FAnimationPayloadData> UVmdTranslator::GetAnimationPayloadData(
 	const TArray<UE::Interchange::FAnimationPayloadQuery>& PayloadQueries) const
 {
-	UE_LOG(LogPMXImporter, Log, TEXT("VMD Translator: GetAnimationPayloadData called with %d queries"), PayloadQueries.Num());
-
 	TArray<UE::Interchange::FAnimationPayloadData> PayloadResults;
 
 	if (!CachedVmdModel.IsValid())
@@ -266,8 +251,6 @@ TArray<UE::Interchange::FAnimationPayloadData> UVmdTranslator::GetAnimationPaylo
 			UE_LOG(LogPMXImporter, Warning, TEXT("VMD Translator: Unknown payload key format: %s"), *PayloadKey);
 		}
 	}
-
-	UE_LOG(LogPMXImporter, Log, TEXT("VMD Translator: Returning %d payload results"), PayloadResults.Num());
 
 	return PayloadResults;
 }
