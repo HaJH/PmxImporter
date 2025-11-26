@@ -14,6 +14,14 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/AggregateGeom.h"
 
+namespace
+{
+	// PMX to UE coordinate transformation (matches PmxNodeBuilder)
+	// X-axis 90 degree rotation: Y-up → Z-up
+	const FQuat PMXToUE_Rotation = FQuat(FVector::XAxisVector, FMath::DegreesToRadians(90.0));
+	const FTransform PMXToUE_Transform(PMXToUE_Rotation);
+}
+
 bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 	UPhysicsAsset* PhysicsAsset,
 	USkeletalMesh* SkeletalMesh,
@@ -37,6 +45,20 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 
 	UE_LOG(LogPMXImporter, Display, TEXT("Building PhysicsAsset with %d rigid bodies and %d joints"),
 		PhysicsData.RigidBodies.Num(), PhysicsData.Joints.Num());
+
+	// Log physics override options
+	if (PhysicsData.bForceStandardBonesKinematic || PhysicsData.bForceNonStandardBonesSimulated)
+	{
+		UE_LOG(LogPMXImporter, Display, TEXT("Physics Override Options:"));
+		if (PhysicsData.bForceStandardBonesKinematic)
+		{
+			UE_LOG(LogPMXImporter, Display, TEXT("  - ForceStandardBonesKinematic: ENABLED"));
+		}
+		if (PhysicsData.bForceNonStandardBonesSimulated)
+		{
+			UE_LOG(LogPMXImporter, Display, TEXT("  - ForceNonStandardBonesSimulated: ENABLED"));
+		}
+	}
 
 	// Validate RigidBody -> Bone Mapping
 	int32 InvalidRBBoneRefs = 0;
@@ -226,10 +248,39 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 		break;
 	}
 
+	// Store original physics type for logging
+	const EPhysicsType OriginalPhysType = PhysType;
+
 	// Force kinematic for IK/control bones
 	if (ShouldForceKinematic(Bone.Name))
 	{
 		PhysType = EPhysicsType::PhysType_Kinematic;
+		UE_LOG(LogPMXImporter, Verbose, TEXT("  [IK/Control] '%s' -> Kinematic"), *Bone.Name);
+	}
+
+	// Apply bone type override options
+	const bool bIsStandardBone = IsStandardBone(Bone.Name);
+
+	// Force kinematic for standard skeletal bones if option is enabled
+	if (PhysicsData.bForceStandardBonesKinematic && bIsStandardBone)
+	{
+		PhysType = EPhysicsType::PhysType_Kinematic;
+		if (OriginalPhysType != PhysType)
+		{
+			UE_LOG(LogPMXImporter, Display, TEXT("  [ForceStandardKinematic] '%s' -> Kinematic (was %d)"),
+				*Bone.Name, static_cast<int32>(OriginalPhysType));
+		}
+	}
+
+	// Force simulated for non-standard bones (cloth/hair/accessories) if option is enabled
+	if (PhysicsData.bForceNonStandardBonesSimulated && !bIsStandardBone)
+	{
+		PhysType = EPhysicsType::PhysType_Simulated;
+		if (OriginalPhysType != PhysType)
+		{
+			UE_LOG(LogPMXImporter, Display, TEXT("  [ForceNonStandardSimulated] '%s' -> Simulated (was %d)"),
+				*Bone.Name, static_cast<int32>(OriginalPhysType));
+		}
 	}
 
 	BodySetup->PhysicsType = PhysType;
@@ -250,23 +301,42 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 
 	// Create shape based on type
 	FKAggregateGeom& AggGeom = BodySetup->AggGeom;
-	const float EffectiveScale = PhysicsData.Scale * PhysicsData.ShapeScale;
+	const float BaseScale = PhysicsData.Scale * PhysicsData.ShapeScale;
+
+	UE_LOG(LogPMXImporter, Display, TEXT("CreateBodySetup: Scale=%.2f, ShapeScale=%.2f, SphereScale=%.2f, BoxScale=%.2f, CapsuleScale=%.2f, BaseScale=%.2f"),
+		PhysicsData.Scale, PhysicsData.ShapeScale, PhysicsData.SphereScale, PhysicsData.BoxScale, PhysicsData.CapsuleScale, BaseScale);
+
 	switch (RB.Shape)
 	{
 	case 0: // Sphere
-		SetupSphereShape(AggGeom, RB, EffectiveScale);
+		{
+			const float SphereScale = BaseScale * PhysicsData.SphereScale;
+			UE_LOG(LogPMXImporter, Display, TEXT("  Shape: Sphere, FinalScale=%.2f"), SphereScale);
+			SetupSphereShape(AggGeom, RB, SphereScale, LocalPos);
+		}
 		break;
 	case 1: // Box
-		SetupBoxShape(AggGeom, RB, EffectiveScale);
+		{
+			const float BoxScale = BaseScale * PhysicsData.BoxScale;
+			UE_LOG(LogPMXImporter, Display, TEXT("  Shape: Box, FinalScale=%.2f"), BoxScale);
+			SetupBoxShape(AggGeom, RB, BoxScale, LocalPos, LocalRot);
+		}
 		break;
 	case 2: // Capsule
-		SetupCapsuleShape(AggGeom, RB, EffectiveScale);
+		{
+			const float CapsuleScale = BaseScale * PhysicsData.CapsuleScale;
+			UE_LOG(LogPMXImporter, Display, TEXT("  Shape: Capsule, FinalScale=%.2f"), CapsuleScale);
+			SetupCapsuleShape(AggGeom, RB, CapsuleScale, LocalPos, LocalRot);
+		}
 		break;
 	default:
 		UE_LOG(LogPMXImporter, Warning,
 			TEXT("CreateBodySetup: Unknown shape type %d for RigidBody '%s', using sphere"),
 			RB.Shape, *RB.Name);
-		SetupSphereShape(AggGeom, RB, EffectiveScale);
+		{
+			const float SphereScale = BaseScale * PhysicsData.SphereScale;
+			SetupSphereShape(AggGeom, RB, SphereScale, LocalPos);
+		}
 		break;
 	}
 
@@ -510,28 +580,54 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 	return Constraint;
 }
 
-void FPmxPhysicsBuilder::SetupSphereShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale)
+void FPmxPhysicsBuilder::SetupSphereShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale, const FVector& LocalPos)
 {
 	FKSphereElem Sphere;
 	Sphere.Radius = RB.Size.X * Scale;
+	Sphere.Center = LocalPos;
+
+	UE_LOG(LogPMXImporter, Display, TEXT("SetupSphereShape: RB.Size.X=%.2f, Scale=%.3f, Radius=%.2f, Center=(%.2f,%.2f,%.2f)"),
+		RB.Size.X, Scale, Sphere.Radius, LocalPos.X, LocalPos.Y, LocalPos.Z);
+
 	Geom.SphereElems.Add(Sphere);
 }
 
-void FPmxPhysicsBuilder::SetupBoxShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale)
+void FPmxPhysicsBuilder::SetupBoxShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale, const FVector& LocalPos, const FRotator& LocalRot)
 {
 	FKBoxElem Box;
-	// Box: Apply XZY axis swap (from mmd_tools analysis)
+	// Box: X-axis 90 degree rotation transforms axes as:
+	// PMX (X, Y, Z) -> UE (X, -Z, Y)
+	// After rotation: PMX.X -> UE.X, PMX.Y -> UE.Z, PMX.Z -> UE.-Y
+	// For size (always positive), we use: X->X, Y->Z, Z->Y
 	Box.X = RB.Size.X * Scale * 2.0f;
 	Box.Y = RB.Size.Z * Scale * 2.0f;
 	Box.Z = RB.Size.Y * Scale * 2.0f;
+	Box.Center = LocalPos;
+	Box.Rotation = LocalRot;
+
+	UE_LOG(LogPMXImporter, Display, TEXT("SetupBoxShape: RB.Size=(%.2f,%.2f,%.2f), Scale=%.3f, Result=(%.2f,%.2f,%.2f), Center=(%.2f,%.2f,%.2f), Rotation=(%.2f,%.2f,%.2f)"),
+		RB.Size.X, RB.Size.Y, RB.Size.Z, Scale, Box.X, Box.Y, Box.Z, LocalPos.X, LocalPos.Y, LocalPos.Z, LocalRot.Pitch, LocalRot.Yaw, LocalRot.Roll);
+
 	Geom.BoxElems.Add(Box);
 }
 
-void FPmxPhysicsBuilder::SetupCapsuleShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale)
+void FPmxPhysicsBuilder::SetupCapsuleShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale, const FVector& LocalPos, const FRotator& LocalRot)
 {
 	FKSphylElem Capsule;
+	// Capsule: UE uses Z-axis as the capsule's long axis
+	// PMX uses Y-axis for the long axis
+	// X-axis 90 degree rotation: PMX.Y -> UE.Z (automatically aligns capsule axis)
+	// PMX: Size.X = radius, Size.Y = height (full length including hemispheres)
+	// UE: Radius = cylinder radius, Length = cylinder height (excluding hemispheres)
 	Capsule.Radius = RB.Size.X * Scale;
-	Capsule.Length = RB.Size.Y * Scale;
+	// UE's Length is the cylinder part only, so we subtract the two hemisphere radii
+	Capsule.Length = FMath::Max(0.0f, RB.Size.Y * Scale - 2.0f * Capsule.Radius);
+	Capsule.Center = LocalPos;
+	Capsule.Rotation = LocalRot;
+
+	UE_LOG(LogPMXImporter, Display, TEXT("SetupCapsuleShape: RB.Size=(%.2f,%.2f), Scale=%.3f, Radius=%.2f, Length=%.2f, Center=(%.2f,%.2f,%.2f), Rotation=(%.2f,%.2f,%.2f)"),
+		RB.Size.X, RB.Size.Y, Scale, Capsule.Radius, Capsule.Length, LocalPos.X, LocalPos.Y, LocalPos.Z, LocalRot.Pitch, LocalRot.Yaw, LocalRot.Roll);
+
 	Geom.SphylElems.Add(Capsule);
 }
 
@@ -553,48 +649,128 @@ FVector FPmxPhysicsBuilder::ConvertVectorPmxToUE(const FVector3f& PmxVector, flo
 {
 	// PMX: Right-handed Y-up (X right, Y up, Z forward)
 	// UE: Left-handed Z-up (X forward, Y right, Z up)
-	// Transform: (x, y, z) -> (x, z, y) then flip Z for handedness
-	return FVector(PmxVector.X * Scale, -PmxVector.Z * Scale, PmxVector.Y * Scale);
+	// Apply X-axis 90 degree rotation (same as PmxNodeBuilder for bone positions)
+	const FVector P(
+		static_cast<double>(PmxVector.X),
+		static_cast<double>(PmxVector.Y),
+		static_cast<double>(PmxVector.Z));
+
+	// Transform with X-axis 90 degree rotation
+	const FVector Transformed = PMXToUE_Transform.TransformPosition(P);
+
+	// Apply scale
+	return Transformed * Scale;
 }
 
 FRotator FPmxPhysicsBuilder::ConvertRotationPmxToUE(const FVector3f& PmxRotation)
 {
-	// PMX stores Euler angles in radians (X, Y, Z order)
-	// Convert to degrees and apply coordinate transformation
-	const float PitchDeg = FMath::RadiansToDegrees(PmxRotation.X);
-	const float YawDeg = FMath::RadiansToDegrees(PmxRotation.Y);
-	const float RollDeg = FMath::RadiansToDegrees(PmxRotation.Z);
+	// PMX stores Euler angles in radians (XYZ order in PMX coordinate system)
+	// We need to convert the rotation to UE coordinate system using the same
+	// X-axis 90 degree rotation used for positions.
 
-	// Apply coordinate system transformation
-	// PMX XYZ -> UE Pitch/Yaw/Roll mapping with handedness flip
-	return FRotator(PitchDeg, -YawDeg, -RollDeg);
+	// Build quaternion from PMX Euler angles (in PMX space)
+	// PMX uses XYZ Euler order
+	const double RollRad = static_cast<double>(PmxRotation.X);
+	const double PitchRad = static_cast<double>(PmxRotation.Y);
+	const double YawRad = static_cast<double>(PmxRotation.Z);
+
+	// Create rotation quaternions for each axis in PMX space
+	const FQuat RotX = FQuat(FVector::XAxisVector, RollRad);
+	const FQuat RotY = FQuat(FVector::YAxisVector, PitchRad);
+	const FQuat RotZ = FQuat(FVector::ZAxisVector, YawRad);
+
+	// Combine in XYZ order (PMX convention)
+	const FQuat PmxQuat = RotX * RotY * RotZ;
+
+	// Apply coordinate system transformation:
+	// Transform rotation from PMX space to UE space using similarity transform
+	// UEQuat = PMXToUE * PmxQuat * PMXToUE^-1
+	const FQuat UEQuat = PMXToUE_Rotation * PmxQuat * PMXToUE_Rotation.Inverse();
+
+	return UEQuat.Rotator();
 }
 
 FQuat FPmxPhysicsBuilder::ConvertQuaternionPmxToUE(const FQuat4f& PmxQuat)
 {
-	// Apply coordinate transformation to quaternion
-	return FQuat(PmxQuat.X, -PmxQuat.Z, PmxQuat.Y, PmxQuat.W);
+	// Simple axis swap: (X, Y, Z, W) -> (X, Z, Y, W)
+	// Matches PmxTranslator::ConvertQuaternionPmxToUE
+	return FQuat(PmxQuat.X, PmxQuat.Z, PmxQuat.Y, PmxQuat.W);
 }
 
 bool FPmxPhysicsBuilder::ShouldForceKinematic(const FString& BoneName)
 {
-	// IK bones and control bones should be kinematic
+	// Control/IK/Helper bones should be kinematic (non-deforming bones)
+	// Based on conventions from: Max, Maya, Blender, Unity, Unreal, MMD
 	static const TArray<FString> KinematicPatterns = {
+		// === IK Bones ===
 		TEXT("IK"),
 		TEXT("\xFF29\xFF2B"), // Full-width IK
-		TEXT("\u8DB3\xFF29\xFF2B"), // Leg IK (Japanese)
-		TEXT("\u3064\u307E\u5148\xFF29\xFF2B"), // Toe IK (Japanese)
-		TEXT("\u8155\xFF29\xFF2B"), // Arm IK (Japanese)
-		TEXT("\u76EE\xFF29\xFF2B"), // Eye IK (Japanese)
-		TEXT("\u30BB\u30F3\u30BF\u30FC"), // Center (Japanese)
+		TEXT("\u8DB3\xFF29\xFF2B"), // Leg IK (Japanese: 足ＩＫ)
+		TEXT("\u3064\u307E\u5148\xFF29\xFF2B"), // Toe IK (Japanese: つま先ＩＫ)
+		TEXT("\u8155\xFF29\xFF2B"), // Arm IK (Japanese: 腕ＩＫ)
+		TEXT("\u76EE\xFF29\xFF2B"), // Eye IK (Japanese: 目ＩＫ)
+		TEXT("_ik"), TEXT("_IK"),
+		TEXT("ik_"), TEXT("IK_"),
+
+		// === Control Bones (Max/Maya/Blender) ===
+		TEXT("CTL"), TEXT("CTRL"), TEXT("Control"), TEXT("Ctl"), TEXT("Ctrl"), TEXT("Ctr"),
+		TEXT("_ctl"), TEXT("_ctrl"), TEXT("_control"), TEXT("_ctr"),
+		TEXT("ctl_"), TEXT("ctrl_"), TEXT("control_"), TEXT("ctr_"),
+
+		// === Helper/Dummy Bones (Max) ===
+		TEXT("Helper"), TEXT("Hlp"), TEXT("Dummy"), TEXT("Dmmy"),
+		TEXT("_helper"), TEXT("_hlp"), TEXT("_dummy"), TEXT("_dmmy"),
+		TEXT("helper_"), TEXT("dummy_"),
+
+		// === Target/Effector Bones (Maya/Unity/Unreal) ===
+		TEXT("Target"), TEXT("Tgt"), TEXT("Effector"), TEXT("Eff"),
+		TEXT("_target"), TEXT("_tgt"), TEXT("_effector"), TEXT("_eff"),
+		TEXT("target_"), TEXT("effector_"),
+
+		// === Pole/Hint Bones (Unity/Unreal) ===
+		TEXT("Pole"), TEXT("PoleVector"), TEXT("Hint"),
+		TEXT("_pole"), TEXT("_polevector"), TEXT("_hint"),
+		TEXT("pole_"), TEXT("hint_"),
+
+		// === Locator/Point (Maya) ===
+		TEXT("Locator"), TEXT("Loc"), TEXT("Point"), TEXT("Pt"),
+		TEXT("_locator"), TEXT("_loc"), TEXT("_point"), TEXT("_pt"),
+
+		// === Handle (Maya) ===
+		TEXT("Handle"), TEXT("Hnd"),
+		TEXT("_handle"), TEXT("_hnd"),
+
+		// === Blender Convention ===
+		TEXT("MCH-"), TEXT("MCH_"),   // Mechanism/Helper bones
+		TEXT("ORG-"), TEXT("ORG_"),   // Original bones (rigging helpers)
+
+		// === Constraint/Reference ===
+		TEXT("Constraint"), TEXT("Cns"), TEXT("Reference"), TEXT("Ref"),
+		TEXT("_constraint"), TEXT("_cns"), TEXT("_reference"), TEXT("_ref"),
+
+		// === Guide/Master ===
+		TEXT("Guide"), TEXT("Gd"), TEXT("Master"), TEXT("Mstr"),
+		TEXT("_guide"), TEXT("_gd"), TEXT("_master"), TEXT("_mstr"),
+
+		// === MMD Specific (Japanese) ===
+		TEXT("\u30BB\u30F3\u30BF\u30FC"), // Center (センター)
 		TEXT("Center"),
-		TEXT("\u30B0\u30EB\u30FC\u30D6"), // Groove (Japanese)
+		TEXT("\u30B0\u30EB\u30FC\u30D6"), // Groove (グルーブ)
 		TEXT("Groove"),
-		TEXT("_dummy"),
-		TEXT("_target"),
-		TEXT("_ik")
+		TEXT("\u64CD\u4F5C"), // Operation (操作)
+		TEXT("\u88DC\u52A9"), // Helper (補助)
+		TEXT("\u6369"), // Twist (捩)
+		TEXT("W"), TEXT("WIK"), TEXT("S"), // MMD helper suffixes
+		TEXT("\u5148"), // Tip/End (先) - often for control endpoints
+
+		// === Common Suffixes/Prefixes ===
+		TEXT("_root"), TEXT("root_"), TEXT("Root"),
+		TEXT("_offset"), TEXT("offset_"),
+		TEXT("_aim"), TEXT("aim_"),
+		TEXT("_orient"), TEXT("orient_")
 	};
 
+	// Check for pattern matches
 	for (const FString& Pattern : KinematicPatterns)
 	{
 		if (BoneName.Contains(Pattern, ESearchCase::IgnoreCase))
@@ -602,6 +778,73 @@ bool FPmxPhysicsBuilder::ShouldForceKinematic(const FString& BoneName)
 			return true;
 		}
 	}
+
+	// Additional checks for common patterns
+	// Bones ending with numbers followed by control indicators (e.g., "Bone_01_CTL")
+	if (BoneName.EndsWith(TEXT("_CTL"), ESearchCase::IgnoreCase) ||
+		BoneName.EndsWith(TEXT("_CTRL"), ESearchCase::IgnoreCase) ||
+		BoneName.EndsWith(TEXT("_IK"), ESearchCase::IgnoreCase))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+bool FPmxPhysicsBuilder::IsStandardBone(const FString& BoneName)
+{
+	// Standard skeletal bones (core body/limbs) based on PMX_MMD_StandardBones.md
+	// These bones are typically used for character deformation/animation
+	// Excludes physics-only bones (cloth, hair, accessories)
+
+	static const TArray<FString> StandardBonePatterns = {
+		// Core/Center (Japanese)
+		TEXT("センター"), TEXT("グルーブ"), TEXT("下半身"), TEXT("上半身"),
+		TEXT("上半身2"), TEXT("首"), TEXT("頭"), TEXT("両目"), TEXT("左目"), TEXT("右目"),
+
+		// Core/Center (English variants)
+		TEXT("Center"), TEXT("Groove"), TEXT("LowerBody"), TEXT("Pelvis"),
+		TEXT("UpperBody"), TEXT("Spine"), TEXT("Neck"), TEXT("Head"),
+		TEXT("Eyes"), TEXT("Eye_L"), TEXT("Eye_R"),
+
+		// Arms/Hands (Japanese)
+		TEXT("肩"), TEXT("腕"), TEXT("ひじ"), TEXT("肘"), TEXT("手首"), TEXT("手"),
+		TEXT("左肩"), TEXT("左腕"), TEXT("左ひじ"), TEXT("左肘"), TEXT("左手首"), TEXT("左手"),
+		TEXT("右肩"), TEXT("右腕"), TEXT("右ひじ"), TEXT("右肘"), TEXT("右手首"), TEXT("右手"),
+
+		// Arms/Hands (English variants)
+		TEXT("Shoulder"), TEXT("Clavicle"),
+		TEXT("UpperArm"), TEXT("Arm"),
+		TEXT("LowerArm"), TEXT("Forearm"), TEXT("Elbow"),
+		TEXT("Wrist"), TEXT("Hand"),
+
+		// Fingers (Japanese - with variants)
+		TEXT("親指"), TEXT("人指"), TEXT("人差指"), TEXT("中指"), TEXT("薬指"), TEXT("小指"),
+
+		// Fingers (English variants)
+		TEXT("Thumb"), TEXT("Index"), TEXT("Middle"), TEXT("Ring"), TEXT("Pinky"), TEXT("Little"),
+
+		// Legs/Feet (Japanese)
+		TEXT("足"), TEXT("ひざ"), TEXT("膝"), TEXT("足首"), TEXT("つま先"),
+		TEXT("左足"), TEXT("左ひざ"), TEXT("左膝"), TEXT("左足首"), TEXT("左つま先"),
+		TEXT("右足"), TEXT("右ひざ"), TEXT("右膝"), TEXT("右足首"), TEXT("右つま先"),
+
+		// Legs/Feet (English variants)
+		TEXT("UpperLeg"), TEXT("Thigh"),
+		TEXT("LowerLeg"), TEXT("Calf"), TEXT("Knee"),
+		TEXT("Ankle"), TEXT("Foot"),
+		TEXT("Toe"), TEXT("Ball")
+	};
+
+	// Check for exact matches or contains patterns
+	for (const FString& Pattern : StandardBonePatterns)
+	{
+		if (BoneName.Contains(Pattern, ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+
 	return false;
 }
 
