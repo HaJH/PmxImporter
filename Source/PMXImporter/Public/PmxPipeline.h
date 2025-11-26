@@ -92,41 +92,130 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics")
 	bool bImportPhysics = true;
 
+	// =============================================
+	// Physics|Body Category
+	// =============================================
+
 	/** How to handle Physics Type 2 (physics + bone follow) rigid bodies */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Body", meta = (EditCondition = "bImportPhysics"))
 	EPmxPhysicsType2Handling PhysicsType2Mode = EPmxPhysicsType2Handling::ConvertToKinematic;
 
-	/** Scale factor for physics mass */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "100.0"))
-	float PhysicsMassScale = 1.0f;
+	/** Scale factor for physics mass (lower = lighter, more fluid movement) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Body", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "100.0"))
+	float PhysicsMassScale = 0.2f;
 
-	/** Scale factor for physics damping */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.0", ClampMax = "10.0"))
-	float PhysicsDampingScale = 1.0f;
+	/** Scale factor for physics damping (lower = more bouncy/swaying, slower settling) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Body", meta = (EditCondition = "bImportPhysics", ClampMin = "0.0", ClampMax = "10.0"))
+	float PhysicsDampingScale = 0.5f;
+
+	/** Force standard skeletal bones (core body/limbs) to kinematic, ignoring PMX physics type */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Body", meta = (EditCondition = "bImportPhysics"))
+	bool bForceStandardBonesKinematic = true;
+
+	/** Force non-standard bones (cloth/hair/accessories) to simulated, ignoring PMX physics type. Only applies to bodies connected to constraints. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Body", meta = (EditCondition = "bImportPhysics"))
+	bool bForceNonStandardBonesSimulated = false;
+
+	// =============================================
+	// Physics|Shape Category
+	// =============================================
 
 	/** Scale factor for physics body shapes (sphere, box, capsule radius/size) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Shape", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
 	float PhysicsShapeScale = 1.0f;
 
 	/** Additional scale factor for sphere shapes only (multiplied with PhysicsShapeScale) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Shape", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
 	float PhysicsSphereScale = 1.0f;
 
 	/** Additional scale factor for box shapes only (multiplied with PhysicsShapeScale) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Shape", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
 	float PhysicsBoxScale = 1.0f;
 
 	/** Additional scale factor for capsule shapes only (multiplied with PhysicsShapeScale) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Shape", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
 	float PhysicsCapsuleScale = 1.0f;
 
-	/** Force standard skeletal bones (core body/limbs) to kinematic, ignoring PMX physics type */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics"))
-	bool bForceStandardBonesKinematic = false;
+	// =============================================
+	// Physics|Collision Category
+	// =============================================
 
-	/** Force non-standard bones (cloth/hair/accessories) to simulated, ignoring PMX physics type */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics"))
-	bool bForceNonStandardBonesSimulated = false;
+	/** Disable collision between bodies connected by constraints (prevents stiff behavior from overlapping bodies) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Collision", meta = (EditCondition = "bImportPhysics"))
+	bool bDisableConstraintBodyCollision = true;
+
+	/** Use PMX collision group/mask settings for filtering (disable collision between bodies with matching NonCollisionGroup) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Collision", meta = (EditCondition = "bImportPhysics"))
+	bool bUsePmxCollisionGroups = true;
+
+	/** Enable collision between standard bones (body/limbs) and non-standard bones (cloth/hair/accessories). Warning: Once penetrated, cloth may stay inverted. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Collision", meta = (EditCondition = "bImportPhysics"))
+	bool bEnableStandardNonStandardCollision = false;
+
+	// =============================================
+	// Physics|Constraint Category
+	// =============================================
+
+	/** Constraint 설정 모드 - PMX 설정 사용 또는 일괄 덮어쓰기 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics"))
+	EPmxConstraintMode ConstraintMode = EPmxConstraintMode::UsePmxSettings;
+
+	/** Scale factor for constraint spring stiffness (lower = softer, more flowing) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
+	float ConstraintStiffnessScale = 0.2f;
+
+	/** Scale factor for constraint spring damping (lower = slower settling) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics", ClampMin = "0.0", ClampMax = "10.0"))
+	float ConstraintDampingScale = 0.3f;
+
+	/** Maximum angular limit for constraints in degrees (clamps PMX rotation limits). Higher values = more flexible movement. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && ConstraintMode == EPmxConstraintMode::UsePmxSettings", ClampMin = "0.1", ClampMax = "180.0"))
+	float MaxAngularLimit = 15.0f;
+
+	/** Force all linear motion to Locked regardless of PMX settings. Completely prevents spring-like stretching of hair/cloth chains. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && ConstraintMode == EPmxConstraintMode::UsePmxSettings"))
+	bool bForceAllLinearMotionLocked = true;
+
+	/** Disable linear spring drive (prevents spring-like stretching caused by SpringMoveCoefficient). Should be enabled with bForceAllLinearMotionLocked for best results. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics"))
+	bool bDisableLinearSpringDrive = true;
+
+	/** Linear motion tolerance (cm) - MoveRestriction values below this are treated as Locked. Only used when bForceAllLinearMotionLocked is false. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && ConstraintMode == EPmxConstraintMode::UsePmxSettings && !bForceAllLinearMotionLocked", ClampMin = "0.0", ClampMax = "10.0"))
+	float LinearMotionTolerance = 1.0f;
+
+	/** [Override Mode] Lock all linear motion (translation) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && ConstraintMode == EPmxConstraintMode::OverrideAll"))
+	bool bLockAllLinearMotion = true;
+
+	/** [Override Mode] Angular motion type for all constraints */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && ConstraintMode == EPmxConstraintMode::OverrideAll"))
+	TEnumAsByte<EAngularConstraintMotion> OverrideAngularMotion = EAngularConstraintMotion::ACM_Limited;
+
+	/** [Override Mode] Swing1 limit in degrees */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && ConstraintMode == EPmxConstraintMode::OverrideAll", ClampMin = "0.0", ClampMax = "180.0"))
+	float OverrideSwing1Limit = 5.0f;
+
+	/** [Override Mode] Swing2 limit in degrees */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && ConstraintMode == EPmxConstraintMode::OverrideAll", ClampMin = "0.0", ClampMax = "180.0"))
+	float OverrideSwing2Limit = 5.0f;
+
+	/** [Override Mode] Twist limit in degrees */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && ConstraintMode == EPmxConstraintMode::OverrideAll", ClampMin = "0.0", ClampMax = "180.0"))
+	float OverrideTwistLimit = 5.0f;
+
+	/** Use soft constraint (smoother limits with stiffness/damping). May cause stretching at high velocities. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics"))
+	bool bUseSoftConstraint = false;
+
+	/** Soft constraint stiffness (spring strength) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && bUseSoftConstraint", ClampMin = "0.0", ClampMax = "10000.0"))
+	float SoftConstraintStiffness = 50.0f;
+
+	/** Soft constraint damping (resistance) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Constraint", meta = (EditCondition = "bImportPhysics && bUseSoftConstraint", ClampMin = "0.0", ClampMax = "100.0"))
+	float SoftConstraintDamping = 5.0f;
+
 
 	// =============================================
 	// Material Category

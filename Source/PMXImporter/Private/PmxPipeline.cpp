@@ -53,6 +53,11 @@ namespace PmxPipelineAttributeKeys
 	const FString PhysicsCapsuleScale = TEXT("PMX:PhysicsCapsuleScale");
 	const FString ForceStandardBonesKinematic = TEXT("PMX:ForceStandardBonesKinematic");
 	const FString ForceNonStandardBonesSimulated = TEXT("PMX:ForceNonStandardBonesSimulated");
+	const FString DisableConstraintBodyCollision = TEXT("PMX:DisableConstraintBodyCollision");
+	const FString UsePmxCollisionGroups = TEXT("PMX:UsePmxCollisionGroups");
+	const FString ConstraintStiffnessScale = TEXT("PMX:ConstraintStiffnessScale");
+	const FString ConstraintDampingScale = TEXT("PMX:ConstraintDampingScale");
+	const FString MaxAngularLimit = TEXT("PMX:MaxAngularLimit");
 	const FString MarkSharpEdges = TEXT("PMX:MarkSharpEdges");
 	const FString SharpEdgeAngle = TEXT("PMX:SharpEdgeAngle");
 	const FString ImportAddUV2AsVertexColors = TEXT("PMX:ImportAddUV2AsVertexColors");
@@ -140,6 +145,11 @@ void UPmxPipeline::StoreOptionsToSourceNode(UInterchangeBaseNodeContainer* BaseN
 	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsCapsuleScale, PhysicsCapsuleScale);
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::ForceStandardBonesKinematic, bForceStandardBonesKinematic);
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::ForceNonStandardBonesSimulated, bForceNonStandardBonesSimulated);
+	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::DisableConstraintBodyCollision, bDisableConstraintBodyCollision);
+	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::UsePmxCollisionGroups, bUsePmxCollisionGroups);
+	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::ConstraintStiffnessScale, ConstraintStiffnessScale);
+	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::ConstraintDampingScale, ConstraintDampingScale);
+	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::MaxAngularLimit, MaxAngularLimit);
 
 	// Material options
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::UseMipmap, bUseMipmap);
@@ -184,6 +194,42 @@ void UPmxPipeline::UpdatePhysicsCacheOptions() const
 			Cache.DampingScale = PhysicsDampingScale;
 			Cache.bForceStandardBonesKinematic = bForceStandardBonesKinematic;
 			Cache.bForceNonStandardBonesSimulated = bForceNonStandardBonesSimulated;
+
+			// Update collision filtering options
+			Cache.bDisableConstraintBodyCollision = bDisableConstraintBodyCollision;
+			Cache.bUsePmxCollisionGroups = bUsePmxCollisionGroups;
+			Cache.bEnableStandardNonStandardCollision = bEnableStandardNonStandardCollision;
+
+			// Update constraint scale options
+			Cache.ConstraintStiffnessScale = ConstraintStiffnessScale;
+			Cache.ConstraintDampingScale = ConstraintDampingScale;
+			Cache.MaxAngularLimit = MaxAngularLimit;
+			Cache.bForceAllLinearMotionLocked = bForceAllLinearMotionLocked;
+			Cache.bDisableLinearSpringDrive = bDisableLinearSpringDrive;
+			Cache.LinearMotionTolerance = LinearMotionTolerance;
+
+			// Constraint mode options (Phase 2)
+			Cache.ConstraintMode = ConstraintMode;
+			Cache.bLockAllLinearMotion = bLockAllLinearMotion;
+			Cache.OverrideAngularMotion = OverrideAngularMotion;
+			Cache.OverrideSwing1Limit = OverrideSwing1Limit;
+			Cache.OverrideSwing2Limit = OverrideSwing2Limit;
+			Cache.OverrideTwistLimit = OverrideTwistLimit;
+
+			// Soft Constraint options
+			Cache.bUseSoftConstraint = bUseSoftConstraint;
+			Cache.SoftConstraintStiffness = SoftConstraintStiffness;
+			Cache.SoftConstraintDamping = SoftConstraintDamping;
+
+			// Long chain optimization - hardcoded defaults (not exposed in UI)
+			// These options have minimal impact and add unnecessary complexity
+			Cache.bOptimizeForLongChains = true;
+			Cache.bEnableProjection = true;
+			Cache.ProjectionLinearTolerance = 1.0f;
+			Cache.ProjectionAngularTolerance = 10.0f;
+			Cache.bAutoParentDominates = false;
+			Cache.bEnableMassConditioning = false;
+			Cache.ContactTransferScale = 0.3f;
 
 			UpdatedCount++;
 		}

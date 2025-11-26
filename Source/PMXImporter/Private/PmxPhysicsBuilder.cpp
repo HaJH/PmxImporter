@@ -40,38 +40,9 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 		return false;
 	}
 
-	UE_LOG(LogPMXImporter, Display, TEXT("BuildPhysicsAsset: SkeletalMesh has %d bones, PMX has %d bones"),
-		RefSkel.GetNum(), PhysicsData.Bones.Num());
-
-	UE_LOG(LogPMXImporter, Display, TEXT("Building PhysicsAsset with %d rigid bodies and %d joints"),
-		PhysicsData.RigidBodies.Num(), PhysicsData.Joints.Num());
-
-	// Log physics override options
-	if (PhysicsData.bForceStandardBonesKinematic || PhysicsData.bForceNonStandardBonesSimulated)
-	{
-		UE_LOG(LogPMXImporter, Display, TEXT("Physics Override Options:"));
-		if (PhysicsData.bForceStandardBonesKinematic)
-		{
-			UE_LOG(LogPMXImporter, Display, TEXT("  - ForceStandardBonesKinematic: ENABLED"));
-		}
-		if (PhysicsData.bForceNonStandardBonesSimulated)
-		{
-			UE_LOG(LogPMXImporter, Display, TEXT("  - ForceNonStandardBonesSimulated: ENABLED"));
-		}
-	}
-
-	// Validate RigidBody -> Bone Mapping
-	int32 InvalidRBBoneRefs = 0;
-	for (int32 i = 0; i < PhysicsData.RigidBodies.Num(); ++i)
-	{
-		const FPmxRigidBody& RBCheck = PhysicsData.RigidBodies[i];
-		if (RBCheck.RelatedBoneIndex < 0 || RBCheck.RelatedBoneIndex >= PhysicsData.Bones.Num())
-		{
-			++InvalidRBBoneRefs;
-		}
-	}
-	UE_LOG(LogPMXImporter, Display, TEXT("  Total RigidBodies: %d, Invalid bone refs: %d"),
-		PhysicsData.RigidBodies.Num(), InvalidRBBoneRefs);
+	UE_LOG(LogPMXImporter, Display, TEXT("Building PhysicsAsset: %d rigid bodies, %d joints (MassScale=%.2f, DampingScale=%.2f, MaxAngularLimit=%.1f)"),
+		PhysicsData.RigidBodies.Num(), PhysicsData.Joints.Num(),
+		PhysicsData.MassScale, PhysicsData.DampingScale, PhysicsData.MaxAngularLimit);
 
 	// Clear existing data
 	PhysicsAsset->SkeletalBodySetups.Empty();
@@ -98,7 +69,7 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 		const FPmxBone& Bone = PhysicsData.Bones[RB.RelatedBoneIndex];
 
 		USkeletalBodySetup* BodySetup = CreateBodySetup(
-			PhysicsAsset, RB, Bone, RefSkel, PhysicsData);
+			PhysicsAsset, RB, RBIndex, Bone, RefSkel, PhysicsData);
 
 		if (BodySetup)
 		{
@@ -111,21 +82,10 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 	PhysicsAsset->UpdateBodySetupIndexMap();
 	PhysicsAsset->UpdateBoundsBodiesArray();
 
-	// 요약 통계 로그
-	int32 SkippedRigidBodies = PhysicsData.RigidBodies.Num() - CreatedBodies;
-	if (SkippedRigidBodies > 0)
-	{
-		UE_LOG(LogPMXImporter, Display,
-			TEXT("Created %d BodySetups (%d/%d valid RigidBodies, %d skipped due to invalid bone references)"),
-			CreatedBodies, CreatedBodies, PhysicsData.RigidBodies.Num(), SkippedRigidBodies);
-	}
-	else
-	{
-		UE_LOG(LogPMXImporter, Display, TEXT("Created %d BodySetups"), CreatedBodies);
-	}
 
 	// Create Constraints for each Joint
 	int32 CreatedConstraints = 0;
+	int32 DisabledCollisionPairs = 0;
 	for (int32 JointIndex = 0; JointIndex < PhysicsData.Joints.Num(); ++JointIndex)
 	{
 		const FPmxJoint& Joint = PhysicsData.Joints[JointIndex];
@@ -148,10 +108,149 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 		if (Constraint)
 		{
 			++CreatedConstraints;
+
+			// Disable collision between constraint-connected bodies if option is enabled
+			// This prevents stiff behavior from overlapping rigid bodies in PMX
+			if (PhysicsData.bDisableConstraintBodyCollision && *BodyAPtr && *BodyBPtr)
+			{
+				const int32 BodyIndexA = PhysicsAsset->FindBodyIndex((*BodyAPtr)->BoneName);
+				const int32 BodyIndexB = PhysicsAsset->FindBodyIndex((*BodyBPtr)->BoneName);
+
+				if (BodyIndexA != INDEX_NONE && BodyIndexB != INDEX_NONE)
+				{
+					PhysicsAsset->DisableCollision(BodyIndexA, BodyIndexB);
+					++DisabledCollisionPairs;
+
+					UE_LOG(LogPMXImporter, Verbose,
+						TEXT("Disabled collision between '%s' and '%s' (constraint: '%s')"),
+						*(*BodyAPtr)->BoneName.ToString(), *(*BodyBPtr)->BoneName.ToString(), *Joint.Name);
+				}
+			}
 		}
 	}
 
-	UE_LOG(LogPMXImporter, Display, TEXT("Created %d Constraints"), CreatedConstraints);
+	UE_LOG(LogPMXImporter, Display, TEXT("Created %d bodies, %d constraints"), CreatedBodies, CreatedConstraints);
+
+	// Apply PMX collision group filtering if enabled
+	// PMX uses NonCollisionGroup bitmask - bodies with matching bits should not collide
+	if (PhysicsData.bUsePmxCollisionGroups)
+	{
+		int32 GroupDisabledPairs = 0;
+		const int32 NumBodies = PhysicsData.RigidBodies.Num();
+
+		// Check each pair of rigid bodies
+		for (int32 i = 0; i < NumBodies; ++i)
+		{
+			USkeletalBodySetup** BodyIPtr = RigidBodyToBodySetup.Find(i);
+			if (!BodyIPtr || !(*BodyIPtr))
+			{
+				continue;
+			}
+
+			const FPmxRigidBody& RBI = PhysicsData.RigidBodies[i];
+
+			for (int32 j = i + 1; j < NumBodies; ++j)
+			{
+				USkeletalBodySetup** BodyJPtr = RigidBodyToBodySetup.Find(j);
+				if (!BodyJPtr || !(*BodyJPtr))
+				{
+					continue;
+				}
+
+				const FPmxRigidBody& RBJ = PhysicsData.RigidBodies[j];
+
+				// Check if bodies should not collide based on PMX group/mask
+				// Body I is in group I, with NonCollisionGroup mask specifying which groups to ignore
+				// If Body J's group bit is set in Body I's NonCollisionGroup mask, don't collide
+				// Also check the reverse: if Body I's group bit is set in Body J's NonCollisionGroup mask
+				const uint16 GroupMaskI = static_cast<uint16>(1 << RBI.Group);
+				const uint16 GroupMaskJ = static_cast<uint16>(1 << RBJ.Group);
+
+				const bool bIIgnoresJ = (RBI.NonCollisionGroup & GroupMaskJ) != 0;
+				const bool bJIgnoresI = (RBJ.NonCollisionGroup & GroupMaskI) != 0;
+
+				if (bIIgnoresJ || bJIgnoresI)
+				{
+					const int32 BodyIndexI = PhysicsAsset->FindBodyIndex((*BodyIPtr)->BoneName);
+					const int32 BodyIndexJ = PhysicsAsset->FindBodyIndex((*BodyJPtr)->BoneName);
+
+					if (BodyIndexI != INDEX_NONE && BodyIndexJ != INDEX_NONE)
+					{
+						PhysicsAsset->DisableCollision(BodyIndexI, BodyIndexJ);
+						++GroupDisabledPairs;
+
+						UE_LOG(LogPMXImporter, Verbose,
+							TEXT("PMX Group Filter: Disabled collision between '%s' (Group %d, Mask 0x%04X) and '%s' (Group %d, Mask 0x%04X)"),
+							*(*BodyIPtr)->BoneName.ToString(), RBI.Group, RBI.NonCollisionGroup,
+							*(*BodyJPtr)->BoneName.ToString(), RBJ.Group, RBJ.NonCollisionGroup);
+					}
+				}
+			}
+		}
+
+	}
+
+	// Enable collision between standard bones (body/limbs) and non-standard bones (cloth/hair)
+	// This ensures skirts don't pass through the body
+	if (PhysicsData.bEnableStandardNonStandardCollision)
+	{
+		int32 EnabledPairs = 0;
+
+		for (int32 i = 0; i < PhysicsData.RigidBodies.Num(); ++i)
+		{
+			USkeletalBodySetup** BodyIPtr = RigidBodyToBodySetup.Find(i);
+			if (!BodyIPtr || !(*BodyIPtr))
+			{
+				continue;
+			}
+
+			const FPmxRigidBody& RBI = PhysicsData.RigidBodies[i];
+			if (RBI.RelatedBoneIndex < 0 || RBI.RelatedBoneIndex >= PhysicsData.Bones.Num())
+			{
+				continue;
+			}
+
+			const FString& BoneNameI = PhysicsData.Bones[RBI.RelatedBoneIndex].Name;
+			const bool bIsStandardI = IsStandardBone(BoneNameI);
+
+			for (int32 j = i + 1; j < PhysicsData.RigidBodies.Num(); ++j)
+			{
+				USkeletalBodySetup** BodyJPtr = RigidBodyToBodySetup.Find(j);
+				if (!BodyJPtr || !(*BodyJPtr))
+				{
+					continue;
+				}
+
+				const FPmxRigidBody& RBJ = PhysicsData.RigidBodies[j];
+				if (RBJ.RelatedBoneIndex < 0 || RBJ.RelatedBoneIndex >= PhysicsData.Bones.Num())
+				{
+					continue;
+				}
+
+				const FString& BoneNameJ = PhysicsData.Bones[RBJ.RelatedBoneIndex].Name;
+				const bool bIsStandardJ = IsStandardBone(BoneNameJ);
+
+				// If one is standard and the other is non-standard, enable collision
+				if (bIsStandardI != bIsStandardJ)
+				{
+					const int32 BodyIndexI = PhysicsAsset->FindBodyIndex((*BodyIPtr)->BoneName);
+					const int32 BodyIndexJ = PhysicsAsset->FindBodyIndex((*BodyJPtr)->BoneName);
+
+					if (BodyIndexI != INDEX_NONE && BodyIndexJ != INDEX_NONE)
+					{
+						// Re-enable collision (may have been disabled by previous filters)
+						PhysicsAsset->EnableCollision(BodyIndexI, BodyIndexJ);
+						++EnabledPairs;
+					}
+				}
+			}
+		}
+
+		if (EnabledPairs > 0)
+		{
+			UE_LOG(LogPMXImporter, Display, TEXT("Enabled %d standard-nonstandard body collision pairs"), EnabledPairs);
+		}
+	}
 
 	// Final update
 	PhysicsAsset->UpdateBodySetupIndexMap();
@@ -162,6 +261,7 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 	UPhysicsAsset* Asset,
 	const FPmxRigidBody& RB,
+	int32 RBIndex,
 	const FPmxBone& Bone,
 	const FReferenceSkeleton& RefSkel,
 	const FPmxPhysicsCache& PhysicsData)
@@ -248,14 +348,10 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 		break;
 	}
 
-	// Store original physics type for logging
-	const EPhysicsType OriginalPhysType = PhysType;
-
 	// Force kinematic for IK/control bones
 	if (ShouldForceKinematic(Bone.Name))
 	{
 		PhysType = EPhysicsType::PhysType_Kinematic;
-		UE_LOG(LogPMXImporter, Verbose, TEXT("  [IK/Control] '%s' -> Kinematic"), *Bone.Name);
 	}
 
 	// Apply bone type override options
@@ -265,21 +361,35 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 	if (PhysicsData.bForceStandardBonesKinematic && bIsStandardBone)
 	{
 		PhysType = EPhysicsType::PhysType_Kinematic;
-		if (OriginalPhysType != PhysType)
-		{
-			UE_LOG(LogPMXImporter, Display, TEXT("  [ForceStandardKinematic] '%s' -> Kinematic (was %d)"),
-				*Bone.Name, static_cast<int32>(OriginalPhysType));
-		}
 	}
 
 	// Force simulated for non-standard bones (cloth/hair/accessories) if option is enabled
+	// Only apply to bodies that are connected to at least one constraint (joint)
+	// Chain roots are kept Kinematic to anchor physics chains to the body
 	if (PhysicsData.bForceNonStandardBonesSimulated && !bIsStandardBone)
 	{
-		PhysType = EPhysicsType::PhysType_Simulated;
-		if (OriginalPhysType != PhysType)
+		// Check if this body is connected to any constraint
+		const bool bHasConstraint = IsRigidBodyConnectedToConstraint(RBIndex, PhysicsData.Joints);
+
+		if (bHasConstraint)
 		{
-			UE_LOG(LogPMXImporter, Display, TEXT("  [ForceNonStandardSimulated] '%s' -> Simulated (was %d)"),
-				*Bone.Name, static_cast<int32>(OriginalPhysType));
+			// Check if this body should stay Kinematic (conservative approach)
+			// Chain root = parent only, never child in any joint
+			// Original PhysicsType=0 = FollowBone (designed to be Kinematic)
+			// Either condition means this body should anchor to the skeleton
+			const bool bIsRoot = IsChainRoot(RBIndex, PhysicsData.Joints);
+			const bool bOriginallyKinematic = (RB.PhysicsType == 0); // FollowBone
+
+			if (bIsRoot || bOriginallyKinematic)
+			{
+				// Keep Kinematic to anchor the chain to the body
+				PhysType = EPhysicsType::PhysType_Kinematic;
+			}
+			else
+			{
+				// Only chain middle/end nodes with original PhysicsType!=0 become Simulated
+				PhysType = EPhysicsType::PhysType_Simulated;
+			}
 		}
 	}
 
@@ -303,40 +413,20 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 	FKAggregateGeom& AggGeom = BodySetup->AggGeom;
 	const float BaseScale = PhysicsData.Scale * PhysicsData.ShapeScale;
 
-	UE_LOG(LogPMXImporter, Display, TEXT("CreateBodySetup: Scale=%.2f, ShapeScale=%.2f, SphereScale=%.2f, BoxScale=%.2f, CapsuleScale=%.2f, BaseScale=%.2f"),
-		PhysicsData.Scale, PhysicsData.ShapeScale, PhysicsData.SphereScale, PhysicsData.BoxScale, PhysicsData.CapsuleScale, BaseScale);
-
 	switch (RB.Shape)
 	{
 	case 0: // Sphere
-		{
-			const float SphereScale = BaseScale * PhysicsData.SphereScale;
-			UE_LOG(LogPMXImporter, Display, TEXT("  Shape: Sphere, FinalScale=%.2f"), SphereScale);
-			SetupSphereShape(AggGeom, RB, SphereScale, LocalPos);
-		}
+		SetupSphereShape(AggGeom, RB, BaseScale * PhysicsData.SphereScale, LocalPos);
 		break;
 	case 1: // Box
-		{
-			const float BoxScale = BaseScale * PhysicsData.BoxScale;
-			UE_LOG(LogPMXImporter, Display, TEXT("  Shape: Box, FinalScale=%.2f"), BoxScale);
-			SetupBoxShape(AggGeom, RB, BoxScale, LocalPos, LocalRot);
-		}
+		SetupBoxShape(AggGeom, RB, BaseScale * PhysicsData.BoxScale, LocalPos, LocalRot);
 		break;
 	case 2: // Capsule
-		{
-			const float CapsuleScale = BaseScale * PhysicsData.CapsuleScale;
-			UE_LOG(LogPMXImporter, Display, TEXT("  Shape: Capsule, FinalScale=%.2f"), CapsuleScale);
-			SetupCapsuleShape(AggGeom, RB, CapsuleScale, LocalPos, LocalRot);
-		}
+		SetupCapsuleShape(AggGeom, RB, BaseScale * PhysicsData.CapsuleScale, LocalPos, LocalRot);
 		break;
 	default:
-		UE_LOG(LogPMXImporter, Warning,
-			TEXT("CreateBodySetup: Unknown shape type %d for RigidBody '%s', using sphere"),
-			RB.Shape, *RB.Name);
-		{
-			const float SphereScale = BaseScale * PhysicsData.SphereScale;
-			SetupSphereShape(AggGeom, RB, SphereScale, LocalPos);
-		}
+		UE_LOG(LogPMXImporter, Warning, TEXT("Unknown shape type %d for '%s'"), RB.Shape, *RB.Name);
+		SetupSphereShape(AggGeom, RB, BaseScale * PhysicsData.SphereScale, LocalPos);
 		break;
 	}
 
@@ -456,21 +546,26 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 	const FVector MaxMove = ConvertVectorPmxToUE(Joint.MoveRestrictionMax, PhysicsData.Scale);
 
 	// Setup linear motion
-	auto SetLinearMotion = [](float Min, float Max) -> ELinearConstraintMotion
+	// bForceAllLinearMotionLocked: Completely prevent spring-like stretching regardless of PMX settings
+	// LinearMotionTolerance: Only used when bForceAllLinearMotionLocked is false
+	const bool bForceLocked = PhysicsData.bForceAllLinearMotionLocked;
+	const float LinearTolerance = PhysicsData.LinearMotionTolerance;
+	auto SetLinearMotion = [bForceLocked, LinearTolerance](float Min, float Max) -> ELinearConstraintMotion
 	{
-		const float Tolerance = 0.001f;
-		if (FMath::Abs(Min) < Tolerance && FMath::Abs(Max) < Tolerance)
+		// Force all linear motion to locked if option is enabled
+		if (bForceLocked)
+		{
+			return ELinearConstraintMotion::LCM_Locked;
+		}
+		// Otherwise use tolerance-based locking
+		if (FMath::Abs(Min) < LinearTolerance && FMath::Abs(Max) < LinearTolerance)
 		{
 			return ELinearConstraintMotion::LCM_Locked;
 		}
 		return ELinearConstraintMotion::LCM_Limited;
 	};
 
-	CI.SetLinearXMotion(SetLinearMotion(MinMove.X, MaxMove.X));
-	CI.SetLinearYMotion(SetLinearMotion(MinMove.Y, MaxMove.Y));
-	CI.SetLinearZMotion(SetLinearMotion(MinMove.Z, MaxMove.Z));
-
-	// Set linear limits
+	// Set linear limits (ProfileInstance 직접 설정만 사용 - SetXMotion() 함수는 ConstraintHandle이 유효할 때만 동작)
 	CI.ProfileInstance.LinearLimit.XMotion = SetLinearMotion(MinMove.X, MaxMove.X);
 	CI.ProfileInstance.LinearLimit.YMotion = SetLinearMotion(MinMove.Y, MaxMove.Y);
 	CI.ProfileInstance.LinearLimit.ZMotion = SetLinearMotion(MinMove.Z, MaxMove.Z);
@@ -506,35 +601,134 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 
 	// Map PMX XYZ rotation to UE Swing1/Swing2/Twist
 	// PMX: X=Roll, Y=Pitch, Z=Yaw -> UE: Twist=X, Swing1=Y, Swing2=Z
-	CI.SetAngularTwistMotion(SetAngularMotion(MinRotDeg.X, MaxRotDeg.X));
-	CI.SetAngularSwing1Motion(SetAngularMotion(MinRotDeg.Y, MaxRotDeg.Y));
-	CI.SetAngularSwing2Motion(SetAngularMotion(MinRotDeg.Z, MaxRotDeg.Z));
+	// (ProfileInstance 직접 설정만 사용 - SetAngularXMotion() 함수는 ConstraintHandle이 유효할 때만 동작)
 
-	// Set angular limits
-	const float TwistLimit = FMath::Max(FMath::Abs(MinRotDeg.X), FMath::Abs(MaxRotDeg.X));
-	const float Swing1Limit = FMath::Max(FMath::Abs(MinRotDeg.Y), FMath::Abs(MaxRotDeg.Y));
-	const float Swing2Limit = FMath::Max(FMath::Abs(MinRotDeg.Z), FMath::Abs(MaxRotDeg.Z));
+	// Set angular limits with optional clamping
+	float TwistLimit = FMath::Max(FMath::Abs(MinRotDeg.X), FMath::Abs(MaxRotDeg.X));
+	float Swing1Limit = FMath::Max(FMath::Abs(MinRotDeg.Y), FMath::Abs(MaxRotDeg.Y));
+	float Swing2Limit = FMath::Max(FMath::Abs(MinRotDeg.Z), FMath::Abs(MaxRotDeg.Z));
 
-	CI.ProfileInstance.ConeLimit.Swing1Motion = SetAngularMotion(MinRotDeg.Y, MaxRotDeg.Y);
-	CI.ProfileInstance.ConeLimit.Swing2Motion = SetAngularMotion(MinRotDeg.Z, MaxRotDeg.Z);
-	CI.ProfileInstance.ConeLimit.Swing1LimitDegrees = Swing1Limit;
-	CI.ProfileInstance.ConeLimit.Swing2LimitDegrees = Swing2Limit;
-	CI.ProfileInstance.TwistLimit.TwistMotion = SetAngularMotion(MinRotDeg.X, MaxRotDeg.X);
-	CI.ProfileInstance.TwistLimit.TwistLimitDegrees = TwistLimit;
+	// Get motion types from PMX data
+	EAngularConstraintMotion TwistMotion = SetAngularMotion(MinRotDeg.X, MaxRotDeg.X);
+	EAngularConstraintMotion Swing1Motion = SetAngularMotion(MinRotDeg.Y, MaxRotDeg.Y);
+	EAngularConstraintMotion Swing2Motion = SetAngularMotion(MinRotDeg.Z, MaxRotDeg.Z);
+
+	// Apply MaxAngularLimit clamp if enabled (< 180 degrees)
+	// IMPORTANT: Also change motion to Limited when clamping, otherwise limits are ignored
+	const float MaxLimit = PhysicsData.MaxAngularLimit;
+	if (MaxLimit < 180.0f)
+	{
+		TwistLimit = FMath::Min(TwistLimit, MaxLimit);
+		Swing1Limit = FMath::Min(Swing1Limit, MaxLimit);
+		Swing2Limit = FMath::Min(Swing2Limit, MaxLimit);
+
+		// Force Limited motion when MaxAngularLimit is applied (Free/Locked -> Limited)
+		if (TwistMotion != EAngularConstraintMotion::ACM_Locked || TwistLimit > 0.0f)
+			TwistMotion = EAngularConstraintMotion::ACM_Limited;
+		if (Swing1Motion != EAngularConstraintMotion::ACM_Locked || Swing1Limit > 0.0f)
+			Swing1Motion = EAngularConstraintMotion::ACM_Limited;
+		if (Swing2Motion != EAngularConstraintMotion::ACM_Locked || Swing2Limit > 0.0f)
+			Swing2Motion = EAngularConstraintMotion::ACM_Limited;
+	}
+
+	// Phase 5: Apply constraint mode
+	if (PhysicsData.ConstraintMode == EPmxConstraintMode::OverrideAll)
+	{
+		// Override mode: Use user-specified settings for all constraints
+		CI.ProfileInstance.LinearLimit.XMotion = PhysicsData.bLockAllLinearMotion ? ELinearConstraintMotion::LCM_Locked : ELinearConstraintMotion::LCM_Free;
+		CI.ProfileInstance.LinearLimit.YMotion = PhysicsData.bLockAllLinearMotion ? ELinearConstraintMotion::LCM_Locked : ELinearConstraintMotion::LCM_Free;
+		CI.ProfileInstance.LinearLimit.ZMotion = PhysicsData.bLockAllLinearMotion ? ELinearConstraintMotion::LCM_Locked : ELinearConstraintMotion::LCM_Free;
+		CI.ProfileInstance.LinearLimit.Limit = 0.0f;
+
+		CI.ProfileInstance.ConeLimit.Swing1Motion = PhysicsData.OverrideAngularMotion;
+		CI.ProfileInstance.ConeLimit.Swing2Motion = PhysicsData.OverrideAngularMotion;
+		CI.ProfileInstance.ConeLimit.Swing1LimitDegrees = PhysicsData.OverrideSwing1Limit;
+		CI.ProfileInstance.ConeLimit.Swing2LimitDegrees = PhysicsData.OverrideSwing2Limit;
+		CI.ProfileInstance.TwistLimit.TwistMotion = PhysicsData.OverrideAngularMotion;
+		CI.ProfileInstance.TwistLimit.TwistLimitDegrees = PhysicsData.OverrideTwistLimit;
+	}
+	else
+	{
+		// UsePmxSettings mode: Use PMX joint settings with optional MaxAngularLimit clamp
+		CI.ProfileInstance.ConeLimit.Swing1Motion = Swing1Motion;
+		CI.ProfileInstance.ConeLimit.Swing2Motion = Swing2Motion;
+		CI.ProfileInstance.ConeLimit.Swing1LimitDegrees = Swing1Limit;
+		CI.ProfileInstance.ConeLimit.Swing2LimitDegrees = Swing2Limit;
+		CI.ProfileInstance.TwistLimit.TwistMotion = TwistMotion;
+		CI.ProfileInstance.TwistLimit.TwistLimitDegrees = TwistLimit;
+	}
+
+	// Soft Constraint settings (applies to all modes)
+	if (PhysicsData.bUseSoftConstraint)
+	{
+		CI.ProfileInstance.ConeLimit.bSoftConstraint = true;
+		CI.ProfileInstance.ConeLimit.Stiffness = PhysicsData.SoftConstraintStiffness;
+		CI.ProfileInstance.ConeLimit.Damping = PhysicsData.SoftConstraintDamping;
+
+		CI.ProfileInstance.TwistLimit.bSoftConstraint = true;
+		CI.ProfileInstance.TwistLimit.Stiffness = PhysicsData.SoftConstraintStiffness;
+		CI.ProfileInstance.TwistLimit.Damping = PhysicsData.SoftConstraintDamping;
+	}
+
+	// Phase 6: Long chain optimization
+	if (PhysicsData.bOptimizeForLongChains)
+	{
+		// Projection settings - corrects accumulated constraint errors in long chains
+		if (PhysicsData.bEnableProjection)
+		{
+			CI.ProfileInstance.bEnableProjection = true;
+			CI.ProfileInstance.ProjectionLinearTolerance = PhysicsData.ProjectionLinearTolerance;
+			CI.ProfileInstance.ProjectionAngularTolerance = FMath::DegreesToRadians(PhysicsData.ProjectionAngularTolerance);
+			CI.ProfileInstance.ProjectionLinearAlpha = 0.7f;
+			CI.ProfileInstance.ProjectionAngularAlpha = 0.7f;
+		}
+
+		// Parent Dominates - prevents child bodies from affecting parent
+		if (PhysicsData.bAutoParentDominates)
+		{
+			const bool bIsChainRootA = IsChainRoot(Joint.RigidBodyIndexA, PhysicsData.Joints);
+			const bool bIsChainEndB = IsChainEnd(Joint.RigidBodyIndexB, PhysicsData.Joints);
+			if (bIsChainRootA || bIsChainEndB)
+			{
+				CI.ProfileInstance.bParentDominates = true;
+			}
+		}
+
+		// Mass Conditioning - improves stability for bodies with large mass ratio differences
+		if (PhysicsData.bEnableMassConditioning)
+		{
+			CI.ProfileInstance.bEnableMassConditioning = true;
+		}
+
+		// Contact Transfer Scale - how much collision force transfers from child to parent
+		CI.ProfileInstance.ContactTransferScale = PhysicsData.ContactTransferScale;
+	}
 
 	// Setup spring (for JointType 0 = Spring 6DOF)
 	if (Joint.JointType == 0)
 	{
-		// Linear spring
-		const FVector SpringMove = ConvertVectorPmxToUE(Joint.SpringMoveCoefficient, 1.0f); // Spring coefficients not scaled
-		CI.ProfileInstance.LinearDrive.XDrive.bEnablePositionDrive = SpringMove.X > 0.0f;
-		CI.ProfileInstance.LinearDrive.XDrive.Stiffness = SpringMove.X;
-		CI.ProfileInstance.LinearDrive.YDrive.bEnablePositionDrive = SpringMove.Y > 0.0f;
-		CI.ProfileInstance.LinearDrive.YDrive.Stiffness = SpringMove.Y;
-		CI.ProfileInstance.LinearDrive.ZDrive.bEnablePositionDrive = SpringMove.Z > 0.0f;
-		CI.ProfileInstance.LinearDrive.ZDrive.Stiffness = SpringMove.Z;
+		// Get scale factors from physics cache
+		const float StiffnessScale = PhysicsData.ConstraintStiffnessScale;
+		const float DampingScale = PhysicsData.ConstraintDampingScale;
 
-		// Angular spring
+		// Linear spring with stiffness/damping scale
+		// NOTE: Linear spring drive causes spring-like stretching behavior
+		// When bDisableLinearSpringDrive is true, we skip linear drive entirely
+		if (!PhysicsData.bDisableLinearSpringDrive)
+		{
+			const FVector SpringMove = ConvertVectorPmxToUE(Joint.SpringMoveCoefficient, 1.0f); // Spring coefficients not scaled by position scale
+			CI.ProfileInstance.LinearDrive.XDrive.bEnablePositionDrive = SpringMove.X > 0.0f;
+			CI.ProfileInstance.LinearDrive.XDrive.Stiffness = SpringMove.X * StiffnessScale;
+			CI.ProfileInstance.LinearDrive.XDrive.Damping = 0.1f * DampingScale; // Base damping 0.1
+			CI.ProfileInstance.LinearDrive.YDrive.bEnablePositionDrive = SpringMove.Y > 0.0f;
+			CI.ProfileInstance.LinearDrive.YDrive.Stiffness = SpringMove.Y * StiffnessScale;
+			CI.ProfileInstance.LinearDrive.YDrive.Damping = 0.1f * DampingScale;
+			CI.ProfileInstance.LinearDrive.ZDrive.bEnablePositionDrive = SpringMove.Z > 0.0f;
+			CI.ProfileInstance.LinearDrive.ZDrive.Stiffness = SpringMove.Z * StiffnessScale;
+			CI.ProfileInstance.LinearDrive.ZDrive.Damping = 0.1f * DampingScale;
+		}
+
+		// Angular spring with stiffness/damping scale
 		const FVector SpringRot = FVector(
 			Joint.SpringRotationCoefficient.X,
 			Joint.SpringRotationCoefficient.Y,
@@ -542,7 +736,8 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 		const float AvgSpringRot = (SpringRot.X + SpringRot.Y + SpringRot.Z) / 3.0f;
 
 		CI.ProfileInstance.AngularDrive.SlerpDrive.bEnablePositionDrive = AvgSpringRot > 0.0f;
-		CI.ProfileInstance.AngularDrive.SlerpDrive.Stiffness = AvgSpringRot;
+		CI.ProfileInstance.AngularDrive.SlerpDrive.Stiffness = AvgSpringRot * StiffnessScale;
+		CI.ProfileInstance.AngularDrive.SlerpDrive.Damping = 0.1f * DampingScale; // Base damping 0.1
 	}
 
 	// Convert joint position from world to bone-local coordinates
@@ -570,6 +765,14 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 	CI.SetRefOrientation(EConstraintFrame::Frame1, PriAxis, SecAxis);
 	CI.SetRefOrientation(EConstraintFrame::Frame2, PriAxis, SecAxis);
 
+	// CRITICAL: DefaultProfile과 ProfileInstance 동기화
+	// 이것이 없으면 Serialize 시 DefaultProfile의 빈 값이 ProfileInstance를 덮어씀
+	// 에디터에서 수동으로 값을 설정하면 PostEditChangeProperty가 이를 처리하지만,
+	// 코드에서 직접 생성할 때는 명시적으로 호출해야 함
+#if WITH_EDITOR
+	Constraint->UpdateProfileInstance();
+#endif
+
 	// Add to physics asset
 	Asset->ConstraintSetup.Add(Constraint);
 
@@ -585,49 +788,31 @@ void FPmxPhysicsBuilder::SetupSphereShape(FKAggregateGeom& Geom, const FPmxRigid
 	FKSphereElem Sphere;
 	Sphere.Radius = RB.Size.X * Scale;
 	Sphere.Center = LocalPos;
-
-	UE_LOG(LogPMXImporter, Display, TEXT("SetupSphereShape: RB.Size.X=%.2f, Scale=%.3f, Radius=%.2f, Center=(%.2f,%.2f,%.2f)"),
-		RB.Size.X, Scale, Sphere.Radius, LocalPos.X, LocalPos.Y, LocalPos.Z);
-
 	Geom.SphereElems.Add(Sphere);
 }
 
 void FPmxPhysicsBuilder::SetupBoxShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale, const FVector& LocalPos, const FRotator& LocalRot)
 {
 	FKBoxElem Box;
-	// Box: X-axis 90 degree rotation transforms axes as:
-	// PMX (X, Y, Z) -> UE (X, -Z, Y)
-	// After rotation: PMX.X -> UE.X, PMX.Y -> UE.Z, PMX.Z -> UE.-Y
+	// Box: X-axis 90 degree rotation transforms axes
 	// For size (always positive), we use: X->X, Y->Z, Z->Y
 	Box.X = RB.Size.X * Scale * 2.0f;
 	Box.Y = RB.Size.Z * Scale * 2.0f;
 	Box.Z = RB.Size.Y * Scale * 2.0f;
 	Box.Center = LocalPos;
 	Box.Rotation = LocalRot;
-
-	UE_LOG(LogPMXImporter, Display, TEXT("SetupBoxShape: RB.Size=(%.2f,%.2f,%.2f), Scale=%.3f, Result=(%.2f,%.2f,%.2f), Center=(%.2f,%.2f,%.2f), Rotation=(%.2f,%.2f,%.2f)"),
-		RB.Size.X, RB.Size.Y, RB.Size.Z, Scale, Box.X, Box.Y, Box.Z, LocalPos.X, LocalPos.Y, LocalPos.Z, LocalRot.Pitch, LocalRot.Yaw, LocalRot.Roll);
-
 	Geom.BoxElems.Add(Box);
 }
 
 void FPmxPhysicsBuilder::SetupCapsuleShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale, const FVector& LocalPos, const FRotator& LocalRot)
 {
 	FKSphylElem Capsule;
-	// Capsule: UE uses Z-axis as the capsule's long axis
-	// PMX uses Y-axis for the long axis
-	// X-axis 90 degree rotation: PMX.Y -> UE.Z (automatically aligns capsule axis)
 	// PMX: Size.X = radius, Size.Y = height (full length including hemispheres)
 	// UE: Radius = cylinder radius, Length = cylinder height (excluding hemispheres)
 	Capsule.Radius = RB.Size.X * Scale;
-	// UE's Length is the cylinder part only, so we subtract the two hemisphere radii
 	Capsule.Length = FMath::Max(0.0f, RB.Size.Y * Scale - 2.0f * Capsule.Radius);
 	Capsule.Center = LocalPos;
 	Capsule.Rotation = LocalRot;
-
-	UE_LOG(LogPMXImporter, Display, TEXT("SetupCapsuleShape: RB.Size=(%.2f,%.2f), Scale=%.3f, Radius=%.2f, Length=%.2f, Center=(%.2f,%.2f,%.2f), Rotation=(%.2f,%.2f,%.2f)"),
-		RB.Size.X, RB.Size.Y, Scale, Capsule.Radius, Capsule.Length, LocalPos.X, LocalPos.Y, LocalPos.Z, LocalRot.Pitch, LocalRot.Yaw, LocalRot.Roll);
-
 	Geom.SphylElems.Add(Capsule);
 }
 
@@ -863,4 +1048,60 @@ void FPmxPhysicsBuilder::SetupCollisionFiltering(USkeletalBodySetup* Body, const
 			TEXT("RigidBody '%s': Group=%d, NonCollisionMask=0x%04X (not fully mapped)"),
 			*RB.Name, RB.Group, RB.NonCollisionGroup);
 	}
+}
+
+bool FPmxPhysicsBuilder::IsRigidBodyConnectedToConstraint(int32 RigidBodyIndex, const TArray<FPmxJoint>& Joints)
+{
+	for (const FPmxJoint& Joint : Joints)
+	{
+		if (Joint.RigidBodyIndexA == RigidBodyIndex || Joint.RigidBodyIndexB == RigidBodyIndex)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool FPmxPhysicsBuilder::IsChainRoot(int32 RigidBodyIndex, const TArray<FPmxJoint>& Joints)
+{
+	bool bUsedAsA = false;
+
+	for (const FPmxJoint& Joint : Joints)
+	{
+		// If used as B (child), this is not a root
+		if (Joint.RigidBodyIndexB == RigidBodyIndex)
+		{
+			return false;
+		}
+		// Track if used as A (parent)
+		if (Joint.RigidBodyIndexA == RigidBodyIndex)
+		{
+			bUsedAsA = true;
+		}
+	}
+
+	// Chain root = used as A (parent) but never as B (child)
+	return bUsedAsA;
+}
+
+bool FPmxPhysicsBuilder::IsChainEnd(int32 RigidBodyIndex, const TArray<FPmxJoint>& Joints)
+{
+	bool bUsedAsB = false;
+
+	for (const FPmxJoint& Joint : Joints)
+	{
+		// If used as A (parent), this is not an end
+		if (Joint.RigidBodyIndexA == RigidBodyIndex)
+		{
+			return false;
+		}
+		// Track if used as B (child)
+		if (Joint.RigidBodyIndexB == RigidBodyIndex)
+		{
+			bUsedAsB = true;
+		}
+	}
+
+	// Chain end = used as B (child) but never as A (parent)
+	return bUsedAsB;
 }

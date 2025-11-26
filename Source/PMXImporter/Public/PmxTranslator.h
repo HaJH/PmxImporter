@@ -7,6 +7,7 @@
 #include "InterchangeTranslatorBase.h"
 #include "Mesh/InterchangeMeshPayloadInterface.h"
 #include "Texture/InterchangeTexturePayloadInterface.h"
+#include "PhysicsEngine/ConstraintTypes.h"
 #include "PmxTranslator.generated.h"
 
 class UInterchangeSourceData;
@@ -25,6 +26,17 @@ enum class EPmxPhysicsType2Handling : uint8
 	ConvertToKinematic,  // Type 2 -> Kinematic (bone follows physics partially)
 	ConvertToDynamic,    // Type 2 -> Simulated (full physics simulation)
 	Skip                 // Skip Type 2 bodies entirely
+};
+
+// Constraint 설정 모드
+UENUM(BlueprintType)
+enum class EPmxConstraintMode : uint8
+{
+	/** PMX 파일의 Joint 설정 사용 (MaxAngularLimit 클램프 적용 가능) */
+	UsePmxSettings UMETA(DisplayName = "Use PMX Settings"),
+
+	/** 모든 Constraint를 일괄 설정으로 덮어씀 */
+	OverrideAll UMETA(DisplayName = "Override All")
 };
 
 USTRUCT()
@@ -98,10 +110,10 @@ struct FPmxImportOptions
     EPmxPhysicsType2Handling PhysicsType2Mode = EPmxPhysicsType2Handling::ConvertToKinematic;
 
     UPROPERTY()
-    float PhysicsMassScale = 1.0f;
+    float PhysicsMassScale = 0.2f;
 
     UPROPERTY()
-    float PhysicsDampingScale = 1.0f;
+    float PhysicsDampingScale = 0.3f;
 
     UPROPERTY()
     float PhysicsShapeScale = 1.0f;
@@ -120,6 +132,23 @@ struct FPmxImportOptions
 
     UPROPERTY()
     bool bForceNonStandardBonesSimulated = false;
+
+    // Collision filtering options
+    UPROPERTY()
+    bool bDisableConstraintBodyCollision = true;
+
+    UPROPERTY()
+    bool bUsePmxCollisionGroups = true;
+
+    // Constraint scale options
+    UPROPERTY()
+    float ConstraintStiffnessScale = 0.2f;
+
+    UPROPERTY()
+    float ConstraintDampingScale = 0.3f;
+
+    UPROPERTY()
+    float MaxAngularLimit = 15.0f;
 };
 
 // Cache structure for PMX physics data (used in post-import)
@@ -139,6 +168,43 @@ struct FPmxPhysicsCache
     float CapsuleScale = 1.0f;
     bool bForceStandardBonesKinematic = false;
     bool bForceNonStandardBonesSimulated = false;
+
+    // Collision filtering options
+    bool bDisableConstraintBodyCollision = true;
+    bool bUsePmxCollisionGroups = true;
+    bool bEnableStandardNonStandardCollision = false;
+
+    // Constraint scale options
+    float ConstraintStiffnessScale = 0.2f;
+    float ConstraintDampingScale = 0.3f;
+    float MaxAngularLimit = 15.0f;
+    bool bForceAllLinearMotionLocked = true;
+    bool bDisableLinearSpringDrive = true;
+    float LinearMotionTolerance = 1.0f;
+
+    // Constraint mode options (Phase 2)
+    EPmxConstraintMode ConstraintMode = EPmxConstraintMode::UsePmxSettings;
+
+    // Override settings for ConstraintMode::OverrideAll
+    bool bLockAllLinearMotion = true;
+    EAngularConstraintMotion OverrideAngularMotion = EAngularConstraintMotion::ACM_Limited;
+    float OverrideSwing1Limit = 5.0f;
+    float OverrideSwing2Limit = 5.0f;
+    float OverrideTwistLimit = 5.0f;
+
+    // Soft Constraint options
+    bool bUseSoftConstraint = false;
+    float SoftConstraintStiffness = 50.0f;
+    float SoftConstraintDamping = 5.0f;
+
+    // Long chain optimization options (Phase 6)
+    bool bOptimizeForLongChains = true;
+    bool bEnableProjection = true;
+    float ProjectionLinearTolerance = 1.0f;
+    float ProjectionAngularTolerance = 10.0f;  // degrees
+    bool bAutoParentDominates = false;
+    bool bEnableMassConditioning = false;
+    float ContactTransferScale = 0.3f;
 };
 
 UCLASS()

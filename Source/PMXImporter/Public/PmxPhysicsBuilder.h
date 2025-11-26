@@ -45,6 +45,7 @@ private:
 	 *
 	 * @param Asset			The parent PhysicsAsset
 	 * @param RB			The PMX rigid body data
+	 * @param RBIndex		Index of this rigid body in the RigidBodies array
 	 * @param Bone			The associated PMX bone
 	 * @param RefSkel		The reference skeleton for bone lookup
 	 * @param PhysicsData	The full physics cache (for options)
@@ -53,6 +54,7 @@ private:
 	static USkeletalBodySetup* CreateBodySetup(
 		UPhysicsAsset* Asset,
 		const FPmxRigidBody& RB,
+		int32 RBIndex,
 		const FPmxBone& Bone,
 		const FReferenceSkeleton& RefSkel,
 		const FPmxPhysicsCache& PhysicsData
@@ -116,4 +118,36 @@ private:
 	 * Setup collision filtering for a body based on PMX group data.
 	 */
 	static void SetupCollisionFiltering(USkeletalBodySetup* Body, const FPmxRigidBody& RB);
+
+	/**
+	 * Check if a rigid body is connected to any constraint (joint).
+	 * Used for ForceNonStandardBonesSimulated - only bodies with constraints should be simulated.
+	 *
+	 * @param RigidBodyIndex	Index of the rigid body to check
+	 * @param Joints			Array of all joints in the PMX model
+	 * @return True if the rigid body is referenced by at least one joint
+	 */
+	static bool IsRigidBodyConnectedToConstraint(int32 RigidBodyIndex, const TArray<FPmxJoint>& Joints);
+
+	/**
+	 * Check if a rigid body is a chain root.
+	 * Chain root = Used as RigidBodyIndexA in joints but never as RigidBodyIndexB.
+	 * Chain roots should remain Kinematic to anchor physics chains to the body.
+	 *
+	 * @param RigidBodyIndex	Index of the rigid body to check
+	 * @param Joints			Array of all joints in the PMX model
+	 * @return True if the rigid body is a chain root (parent only, never child in any joint)
+	 */
+	static bool IsChainRoot(int32 RigidBodyIndex, const TArray<FPmxJoint>& Joints);
+
+	/**
+	 * Check if a rigid body is a chain end (leaf node).
+	 * Chain end = Used as RigidBodyIndexB in joints but never as RigidBodyIndexA.
+	 * Chain ends have no children in the physics chain.
+	 *
+	 * @param RigidBodyIndex	Index of the rigid body to check
+	 * @param Joints			Array of all joints in the PMX model
+	 * @return True if the rigid body is a chain end (child only, never parent in any joint)
+	 */
+	static bool IsChainEnd(int32 RigidBodyIndex, const TArray<FPmxJoint>& Joints);
 };
