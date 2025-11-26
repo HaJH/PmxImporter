@@ -37,7 +37,10 @@ public class PMXImporter : ModuleRules
             "AnimationCore",
             "AssetRegistry",
             // For image resizing/utilities used by the translator when handling texture payloads
-            "ImageCore"
+            "ImageCore",
+            // For VMD camera animation (Level Sequence)
+            "LevelSequence",
+            "MovieScene"
         });
 
         PublicIncludePaths.AddRange(new string[]
@@ -46,7 +49,9 @@ public class PMXImporter : ModuleRules
             Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Nodes/Public"),
             Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Import/Public"),
             Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Import/Public/Mesh"),
-            Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Pipelines/Public")
+            Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Import/Public/Animation"),
+            Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Pipelines/Public"),
+            Path.Combine(EngineDirectory, "Plugins/Interchange/Runtime/Source/Parsers/CommonParser/Public")
         });
         PrivateIncludePaths.AddRange(new string[] {});
     }

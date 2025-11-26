@@ -6,6 +6,8 @@
 #include "InterchangeProjectSettings.h"
 #include "PmxTranslator.h"
 #include "PmxPipeline.h"
+#include "VmdTranslator.h"
+#include "VmdPipeline.h"
 
 DEFINE_LOG_CATEGORY(LogPMXImporter);
 
@@ -16,10 +18,13 @@ public:
 	{
 		UE_LOG(LogPMXImporter, Display, TEXT("PMX Importer module started"));
 
-		// Register translator immediately (required for file extension recognition)
+		// Register translators immediately (required for file extension recognition)
 		UInterchangeManager& InterchangeManager = UInterchangeManager::GetInterchangeManager();
 		InterchangeManager.RegisterTranslator(UPmxTranslator::StaticClass());
 		UE_LOG(LogPMXImporter, Display, TEXT("Registered PMX translator"));
+
+		InterchangeManager.RegisterTranslator(UVmdTranslator::StaticClass());
+		UE_LOG(LogPMXImporter, Display, TEXT("Registered VMD translator"));
 
 		// Since LoadingPhase is PostEngineInit, we can register pipelines directly here
 		// (OnPostEngineInit has already fired by the time this module loads)
@@ -34,12 +39,15 @@ public:
 		// Clear static caches
 		UPmxTranslator::MeshPayloadCache.Empty();
 		UPmxTranslator::PhysicsPayloadCache.Empty();
+		UVmdTranslator::VmdPayloadCache.Empty();
 
 		UE_LOG(LogPMXImporter, Verbose, TEXT("PMX Importer module shutdown"));
 	}
 
 private:
-	TObjectPtr<UPmxPipeline> DefaultPipelineInstance;
+	TObjectPtr<UPmxPipeline> DefaultPmxPipelineInstance;
+	TObjectPtr<UVmdPipeline> DefaultVmdPipelineInstance;
+
 	void RegisterPipelines()
 	{
 #if WITH_EDITOR
@@ -52,25 +60,49 @@ private:
 
 		UE_LOG(LogPMXImporter, Display, TEXT("TranslatorClassPath: %s"), *TranslatorClassPath.ToString());
 
-		// Dynamically create pipeline instance at runtime (no Blueprint asset dependency)
-		const FString PackagePath = TEXT("/PMXImporter/Pipelines/DefaultPmxPipeline");
-		UPackage* PipelinePackage = CreatePackage(*PackagePath);
-		PipelinePackage->SetPackageFlags(PKG_CompiledIn);
+		// Dynamically create PMX pipeline instance at runtime (no Blueprint asset dependency)
+		const FString PmxPackagePath = TEXT("/PMXImporter/Pipelines/DefaultPmxPipeline");
+		UPackage* PmxPipelinePackage = CreatePackage(*PmxPackagePath);
+		PmxPipelinePackage->SetPackageFlags(PKG_CompiledIn);
 
-		DefaultPipelineInstance = NewObject<UPmxPipeline>(
-			PipelinePackage,
+		DefaultPmxPipelineInstance = NewObject<UPmxPipeline>(
+			PmxPipelinePackage,
 			UPmxPipeline::StaticClass(),
 			TEXT("DefaultPmxPipeline"),
 			RF_Public | RF_Standalone
 		);
-		DefaultPipelineInstance->AddToRoot();
+		DefaultPmxPipelineInstance->AddToRoot();
 
 		FInterchangeTranslatorPipelines TranslatorPipelines;
 		TranslatorPipelines.Translator = TranslatorClassPath;
-		FSoftObjectPath PipelinePath(DefaultPipelineInstance);
+		FSoftObjectPath PipelinePath(DefaultPmxPipelineInstance);
 		TranslatorPipelines.Pipelines.Add(PipelinePath);
 
-		UE_LOG(LogPMXImporter, Display, TEXT("Pipeline created dynamically: %s"), *PipelinePath.ToString());
+		UE_LOG(LogPMXImporter, Display, TEXT("PMX Pipeline created dynamically: %s"), *PipelinePath.ToString());
+
+		// Create VMD pipeline
+		TSoftClassPtr<UInterchangeTranslatorBase> VmdTranslatorClassPath = TSoftClassPtr<UInterchangeTranslatorBase>(
+			UVmdTranslator::StaticClass()
+		);
+
+		const FString VmdPackagePath = TEXT("/PMXImporter/Pipelines/DefaultVmdPipeline");
+		UPackage* VmdPipelinePackage = CreatePackage(*VmdPackagePath);
+		VmdPipelinePackage->SetPackageFlags(PKG_CompiledIn);
+
+		DefaultVmdPipelineInstance = NewObject<UVmdPipeline>(
+			VmdPipelinePackage,
+			UVmdPipeline::StaticClass(),
+			TEXT("DefaultVmdPipeline"),
+			RF_Public | RF_Standalone
+		);
+		DefaultVmdPipelineInstance->AddToRoot();
+
+		FInterchangeTranslatorPipelines VmdTranslatorPipelines;
+		VmdTranslatorPipelines.Translator = VmdTranslatorClassPath;
+		FSoftObjectPath VmdPipelinePath(DefaultVmdPipelineInstance);
+		VmdTranslatorPipelines.Pipelines.Add(VmdPipelinePath);
+
+		UE_LOG(LogPMXImporter, Display, TEXT("VMD Pipeline created dynamically: %s"), *VmdPipelinePath.ToString());
 
 		// Get project settings
 		UInterchangeProjectSettings* ProjectSettings = GetMutableDefault<UInterchangeProjectSettings>();
@@ -97,7 +129,8 @@ private:
 		if (FInterchangePipelineStack* AssetStack = AssetImportSettings.PipelineStacks.Find(TEXT("Assets")))
 		{
 			AssetStack->PerTranslatorPipelines.Add(TranslatorPipelines);
-			UE_LOG(LogPMXImporter, Display, TEXT("Registered PMX pipeline to 'Assets' stack (PerTranslatorPipelines count: %d)"),
+			AssetStack->PerTranslatorPipelines.Add(VmdTranslatorPipelines);
+			UE_LOG(LogPMXImporter, Display, TEXT("Registered PMX and VMD pipelines to 'Assets' stack (PerTranslatorPipelines count: %d)"),
 				AssetStack->PerTranslatorPipelines.Num());
 		}
 		else
@@ -126,6 +159,21 @@ private:
 			DialogOverrides.PerTranslatorImportDialogOverride.Add(ImportDialogOverride);
 
 			UE_LOG(LogPMXImporter, Display, TEXT("Configured PMX import dialog override"));
+		}
+
+		// Set import dialog to show for VMD files (Animations type)
+		{
+			FInterchangeDialogOverride& VmdDialogOverrides = AssetImportSettings.ShowImportDialogOverride.FindOrAdd(
+				EInterchangeTranslatorAssetType::Animations
+			);
+
+			FInterchangePerTranslatorDialogOverride VmdImportDialogOverride;
+			VmdImportDialogOverride.Translator = VmdTranslatorClassPath;
+			VmdImportDialogOverride.bShowImportDialog = true;
+			VmdImportDialogOverride.bShowReimportDialog = true;
+			VmdDialogOverrides.PerTranslatorImportDialogOverride.Add(VmdImportDialogOverride);
+
+			UE_LOG(LogPMXImporter, Display, TEXT("Configured VMD import dialog override"));
 		}
 
 		UE_LOG(LogPMXImporter, Display, TEXT("PMX Pipeline registration complete"));
