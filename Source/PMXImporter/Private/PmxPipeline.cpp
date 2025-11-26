@@ -48,6 +48,11 @@ namespace PmxPipelineAttributeKeys
 	const FString PhysicsMassScale = TEXT("PMX:PhysicsMassScale");
 	const FString PhysicsDampingScale = TEXT("PMX:PhysicsDampingScale");
 	const FString PhysicsShapeScale = TEXT("PMX:PhysicsShapeScale");
+	const FString PhysicsSphereScale = TEXT("PMX:PhysicsSphereScale");
+	const FString PhysicsBoxScale = TEXT("PMX:PhysicsBoxScale");
+	const FString PhysicsCapsuleScale = TEXT("PMX:PhysicsCapsuleScale");
+	const FString ForceStandardBonesKinematic = TEXT("PMX:ForceStandardBonesKinematic");
+	const FString ForceNonStandardBonesSimulated = TEXT("PMX:ForceNonStandardBonesSimulated");
 	const FString MarkSharpEdges = TEXT("PMX:MarkSharpEdges");
 	const FString SharpEdgeAngle = TEXT("PMX:SharpEdgeAngle");
 	const FString ImportAddUV2AsVertexColors = TEXT("PMX:ImportAddUV2AsVertexColors");
@@ -82,6 +87,11 @@ void UPmxPipeline::ExecutePipeline(UInterchangeBaseNodeContainer* BaseNodeContai
 	// Store options to SourceNode for Translator to read
 	StoreOptionsToSourceNode(BaseNodeContainer);
 
+	// CRITICAL: Update physics cache with current pipeline options
+	// The Translator may have already created the cache with default values,
+	// so we need to update it here with the user's settings from the import dialog
+	UpdatePhysicsCacheOptions();
+
 	// Create texture and material factory nodes
 	CreateTextureFactoryNodes(BaseNodeContainer);
 	CreateMaterialFactoryNodes(BaseNodeContainer);
@@ -89,7 +99,8 @@ void UPmxPipeline::ExecutePipeline(UInterchangeBaseNodeContainer* BaseNodeContai
 	// Configure factory nodes with import options
 	ConfigureFactoryNodes(BaseNodeContainer);
 
-	UE_LOG(LogPMXImporter, Display, TEXT("UPmxPipeline::ExecutePipeline completed"));
+	UE_LOG(LogPMXImporter, Display, TEXT("UPmxPipeline::ExecutePipeline completed (Scale=%.2f, ShapeScale=%.2f, BoxScale=%.2f)"),
+		Scale, PhysicsShapeScale, PhysicsBoxScale);
 }
 
 void UPmxPipeline::StoreOptionsToSourceNode(UInterchangeBaseNodeContainer* BaseNodeContainer) const
@@ -124,6 +135,11 @@ void UPmxPipeline::StoreOptionsToSourceNode(UInterchangeBaseNodeContainer* BaseN
 	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsMassScale, PhysicsMassScale);
 	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsDampingScale, PhysicsDampingScale);
 	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsShapeScale, PhysicsShapeScale);
+	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsSphereScale, PhysicsSphereScale);
+	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsBoxScale, PhysicsBoxScale);
+	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::PhysicsCapsuleScale, PhysicsCapsuleScale);
+	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::ForceStandardBonesKinematic, bForceStandardBonesKinematic);
+	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::ForceNonStandardBonesSimulated, bForceNonStandardBonesSimulated);
 
 	// Material options
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::UseMipmap, bUseMipmap);
@@ -138,8 +154,46 @@ void UPmxPipeline::StoreOptionsToSourceNode(UInterchangeBaseNodeContainer* BaseN
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::ImportAddUV2AsVertexColors, bImportAddUV2AsVertexColors);
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::ImportDisplay, bImportDisplay);
 
-	UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Options stored to SourceNode (Scale=%.2f, ImportMorphs=%d, ImportPhysics=%d)"),
-		Scale, bImportMorphs, bImportPhysics);
+	UE_LOG(LogPMXImporter, Display, TEXT("UPmxPipeline::StoreOptionsToSourceNode - Scale=%.2f, ShapeScale=%.2f, SphereScale=%.2f, BoxScale=%.2f, CapsuleScale=%.2f"),
+		Scale, PhysicsShapeScale, PhysicsSphereScale, PhysicsBoxScale, PhysicsCapsuleScale);
+}
+
+void UPmxPipeline::UpdatePhysicsCacheOptions() const
+{
+	// Update all physics caches with current pipeline options
+	// This is necessary because Translate() may have already created caches with default values
+	// before ExecutePipeline() is called with user-modified options
+
+	int32 UpdatedCount = 0;
+	for (auto& CachePair : UPmxTranslator::PhysicsPayloadCache)
+	{
+		if (CachePair.Value.IsValid())
+		{
+			FPmxPhysicsCache& Cache = *CachePair.Value;
+
+			// Update scale options
+			Cache.Scale = Scale;
+			Cache.ShapeScale = PhysicsShapeScale;
+			Cache.SphereScale = PhysicsSphereScale;
+			Cache.BoxScale = PhysicsBoxScale;
+			Cache.CapsuleScale = PhysicsCapsuleScale;
+
+			// Update other physics options
+			Cache.Type2Mode = PhysicsType2Mode;
+			Cache.MassScale = PhysicsMassScale;
+			Cache.DampingScale = PhysicsDampingScale;
+			Cache.bForceStandardBonesKinematic = bForceStandardBonesKinematic;
+			Cache.bForceNonStandardBonesSimulated = bForceNonStandardBonesSimulated;
+
+			UpdatedCount++;
+		}
+	}
+
+	if (UpdatedCount > 0)
+	{
+		UE_LOG(LogPMXImporter, Display, TEXT("UPmxPipeline: Updated %d physics cache(s) with pipeline options (ShapeScale=%.2f, BoxScale=%.2f)"),
+			UpdatedCount, PhysicsShapeScale, PhysicsBoxScale);
+	}
 }
 
 void UPmxPipeline::ConfigureFactoryNodes(UInterchangeBaseNodeContainer* BaseNodeContainer) const

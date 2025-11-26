@@ -77,9 +77,9 @@ private:
 	);
 
 	// Shape creation methods
-	static void SetupSphereShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale);
-	static void SetupBoxShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale);
-	static void SetupCapsuleShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale);
+	static void SetupSphereShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale, const FVector& LocalPos);
+	static void SetupBoxShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale, const FVector& LocalPos, const FRotator& LocalRot);
+	static void SetupCapsuleShape(FKAggregateGeom& Geom, const FPmxRigidBody& RB, float Scale, const FVector& LocalPos, const FRotator& LocalRot);
 
 	/**
 	 * Convert PMX RigidBody position to bone-local offset.
@@ -103,6 +103,14 @@ private:
 	 * This applies to IK bones, control bones, etc.
 	 */
 	static bool ShouldForceKinematic(const FString& BoneName);
+
+	/**
+	 * Check if a bone is a standard skeletal bone (core body/limbs).
+	 * Standard bones include: center, groove, pelvis, spine, neck, head, eyes,
+	 * shoulders, arms, elbows, wrists, fingers, legs, knees, ankles, toes.
+	 * Excludes physics-only bones like cloth, hair, accessories.
+	 */
+	static bool IsStandardBone(const FString& BoneName);
 
 	/**
 	 * Setup collision filtering for a body based on PMX group data.

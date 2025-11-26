@@ -155,6 +155,30 @@ bool UPmxTranslator::Translate(UInterchangeBaseNodeContainer& BaseNodeContainer)
         {
             ImportOptions.PhysicsShapeScale = FloatValue;
         }
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:PhysicsSphereScale"), FloatValue))
+        {
+            ImportOptions.PhysicsSphereScale = FloatValue;
+        }
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:PhysicsBoxScale"), FloatValue))
+        {
+            ImportOptions.PhysicsBoxScale = FloatValue;
+        }
+        if (SourceNode->GetFloatAttribute(TEXT("PMX:PhysicsCapsuleScale"), FloatValue))
+        {
+            ImportOptions.PhysicsCapsuleScale = FloatValue;
+        }
+
+        UE_LOG(LogPMXImporter, Display, TEXT("PmxTranslator: Read options - ShapeScale=%.2f, SphereScale=%.2f, BoxScale=%.2f, CapsuleScale=%.2f"),
+            ImportOptions.PhysicsShapeScale, ImportOptions.PhysicsSphereScale, ImportOptions.PhysicsBoxScale, ImportOptions.PhysicsCapsuleScale);
+
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:ForceStandardBonesKinematic"), bValue))
+        {
+            ImportOptions.bForceStandardBonesKinematic = bValue;
+        }
+        if (SourceNode->GetBooleanAttribute(TEXT("PMX:ForceNonStandardBonesSimulated"), bValue))
+        {
+            ImportOptions.bForceNonStandardBonesSimulated = bValue;
+        }
 
         // Material options
         if (SourceNode->GetBooleanAttribute(TEXT("PMX:UseMipmap"), bValue))
@@ -652,6 +676,11 @@ void UPmxTranslator::ImportPhysicsSection(const FPmxModel& PmxModel, UInterchang
     PhysicsCache->MassScale = ImportOptions.PhysicsMassScale;
     PhysicsCache->DampingScale = ImportOptions.PhysicsDampingScale;
     PhysicsCache->ShapeScale = ImportOptions.PhysicsShapeScale;
+    PhysicsCache->SphereScale = ImportOptions.PhysicsSphereScale;
+    PhysicsCache->BoxScale = ImportOptions.PhysicsBoxScale;
+    PhysicsCache->CapsuleScale = ImportOptions.PhysicsCapsuleScale;
+    PhysicsCache->bForceStandardBonesKinematic = ImportOptions.bForceStandardBonesKinematic;
+    PhysicsCache->bForceNonStandardBonesSimulated = ImportOptions.bForceNonStandardBonesSimulated;
 
     // Store in static cache using ModelName as key for matching with imported mesh name
     // Use ModelName (not filename) to ensure consistency with SkeletalMesh->GetName() in pipeline
@@ -1138,6 +1167,66 @@ void UPmxTranslator::LogImportSummary(const FPmxModel& PmxModel) const
         PmxModel.Materials.Num(), PmxModel.Morphs.Num(), PmxModel.RigidBodies.Num(), PmxModel.Joints.Num());
 }
 
+// Helper function to convert long path with Unicode characters to Windows 8.3 short path
+#if PLATFORM_WINDOWS
+#include "Windows/AllowWindowsPlatformTypes.h"
+
+static FString GetWindowsShortPath(const FString& LongPath)
+{
+    // Check if file exists first
+    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+    const bool bFileExists = PlatformFile.FileExists(*LongPath);
+
+    UE_LOG(LogPMXImporter, Verbose, TEXT("GetWindowsShortPath: Checking path '%s' (exists=%d)"), *LongPath, bFileExists);
+
+    if (!bFileExists)
+    {
+        UE_LOG(LogPMXImporter, Warning, TEXT("GetWindowsShortPath: File does not exist: %s"), *LongPath);
+        return LongPath;
+    }
+
+    // Try to get the short path name (8.3 format) for better Unicode compatibility
+    TCHAR ShortPathBuffer[MAX_PATH];
+    const DWORD Result = ::GetShortPathName(*LongPath, ShortPathBuffer, MAX_PATH);
+    const DWORD ErrorCode = (Result == 0) ? ::GetLastError() : 0;
+
+    if (Result > 0 && Result < MAX_PATH)
+    {
+        const FString ShortPath(ShortPathBuffer);
+        UE_LOG(LogPMXImporter, Display, TEXT("GetWindowsShortPath: Success - %s -> %s"), *LongPath, *ShortPath);
+        return ShortPath;
+    }
+    else
+    {
+        UE_LOG(LogPMXImporter, Warning, TEXT("GetWindowsShortPath: GetShortPathName failed with result=%d, error=%d"), Result, ErrorCode);
+    }
+    return LongPath;
+}
+
+#include "Windows/HideWindowsPlatformTypes.h"
+
+#else // !PLATFORM_WINDOWS
+
+static FString GetWindowsShortPath(const FString& LongPath)
+{
+    return LongPath;
+}
+
+#endif // PLATFORM_WINDOWS
+
+// Helper function to check if string contains non-ASCII characters
+static bool ContainsNonASCII(const FString& Str)
+{
+    for (const TCHAR C : Str)
+    {
+        if (C > 127)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Placeholder implementations for remaining helper methods
 void UPmxTranslator::ImportTextures(const FPmxModel& PmxModel, const FString& PmxFilePath, 
     UInterchangeBaseNodeContainer& BaseNodeContainer, TMap<int32, FString>& OutTextureUidMap) const
@@ -1188,18 +1277,61 @@ void UPmxTranslator::ImportTextures(const FPmxModel& PmxModel, const FString& Pm
                 : TexBaseName;
             Texture2DNode->SetDisplayLabel(DisplayLabel);
             // Resolve texture path
-            FString AbsPath = FPaths::IsRelative(PmxTex.TexturePath) 
+            FString AbsPath = FPaths::IsRelative(PmxTex.TexturePath)
                 ? FPaths::ConvertRelativePathToFull(FPaths::Combine(PmxBaseDir, PmxTex.TexturePath))
                 : PmxTex.TexturePath;
             FPaths::CollapseRelativeDirectories(AbsPath);
-            FPaths::MakeStandardFilename(AbsPath);
-            // Advise user if using UNC path which may fail with certain translators
-            if (AbsPath.StartsWith(TEXT("\\\\")) || AbsPath.StartsWith(TEXT("//")))
+
+            // Check if this is a network path (Unix-style from FPaths or original UNC)
+            const bool bIsNetworkPath = AbsPath.StartsWith(TEXT("\\\\")) ||
+                                        (AbsPath.Len() > 2 && AbsPath[0] == TEXT('/') &&
+                                         (FChar::IsDigit(AbsPath[1]) || FChar::IsAlpha(AbsPath[1])));
+
+            // Convert Unix-style network paths to UNC format
+            // FPaths functions may convert \\192.168.0.10\path to /192.168.0.10/path
+            if (bIsNetworkPath && AbsPath.StartsWith(TEXT("/")))
             {
-                UE_LOG(LogPMXImporter, Display, TEXT("Pmx Translator: Texture path '%s' is a network path. If import fails, try copying assets to a local drive."), *AbsPath);
+                // Convert /IP/path to \\IP\path
+                AbsPath = TEXT("\\\\") + AbsPath.Mid(1);
+                AbsPath.ReplaceInline(TEXT("/"), TEXT("\\"));
+                UE_LOG(LogPMXImporter, Verbose, TEXT("Converted Unix-style network path to UNC: %s"), *AbsPath);
             }
-            
-            Texture2DNode->SetPayLoadKey(AbsPath);
+
+            // Only apply MakeStandardFilename for non-network paths
+            // MakeStandardFilename converts UNC paths to Unix-style which breaks texture loading
+            if (!bIsNetworkPath)
+            {
+                FPaths::MakeStandardFilename(AbsPath);
+            }
+
+            // Advise user if using network path
+            if (bIsNetworkPath)
+            {
+                UE_LOG(LogPMXImporter, Display, TEXT("Pmx Translator: Texture path '%s' is a network (UNC) path."), *AbsPath);
+            }
+
+            // Convert to short path if contains non-ASCII characters (for better Unicode compatibility)
+            FString PayloadPath = AbsPath;
+            const bool bHasNonASCII = ContainsNonASCII(AbsPath);
+
+            UE_LOG(LogPMXImporter, Display, TEXT("Pmx Translator: Processing texture path: %s (HasNonASCII=%d)"), *AbsPath, bHasNonASCII);
+
+            if (bHasNonASCII)
+            {
+                const FString ShortPath = GetWindowsShortPath(AbsPath);
+                if (ShortPath != AbsPath)
+                {
+                    UE_LOG(LogPMXImporter, Display, TEXT("Pmx Translator: Converted Unicode texture path to short path: %s -> %s"), *AbsPath, *ShortPath);
+                    PayloadPath = ShortPath;
+                }
+                else
+                {
+                    UE_LOG(LogPMXImporter, Warning, TEXT("Pmx Translator: Failed to convert Unicode texture path to short path: %s (file exists: %d)"),
+                        *AbsPath, FPaths::FileExists(AbsPath));
+                }
+            }
+
+            Texture2DNode->SetPayLoadKey(PayloadPath);
             Texture2DNode->SetCustomSRGB(true);
             OutTextureUidMap.Add(TexIdx, Texture2DNode->GetUniqueID());
             ++CreatedTextureCount;

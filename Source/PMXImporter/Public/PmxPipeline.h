@@ -106,7 +106,27 @@ public:
 
 	/** Scale factor for physics body shapes (sphere, box, capsule radius/size) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
-	float PhysicsShapeScale = 0.5f;
+	float PhysicsShapeScale = 1.0f;
+
+	/** Additional scale factor for sphere shapes only (multiplied with PhysicsShapeScale) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
+	float PhysicsSphereScale = 1.0f;
+
+	/** Additional scale factor for box shapes only (multiplied with PhysicsShapeScale) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
+	float PhysicsBoxScale = 1.0f;
+
+	/** Additional scale factor for capsule shapes only (multiplied with PhysicsShapeScale) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics", ClampMin = "0.01", ClampMax = "10.0"))
+	float PhysicsCapsuleScale = 1.0f;
+
+	/** Force standard skeletal bones (core body/limbs) to kinematic, ignoring PMX physics type */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics"))
+	bool bForceStandardBonesKinematic = false;
+
+	/** Force non-standard bones (cloth/hair/accessories) to simulated, ignoring PMX physics type */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (EditCondition = "bImportPhysics"))
+	bool bForceNonStandardBonesSimulated = false;
 
 	// =============================================
 	// Material Category
@@ -165,6 +185,9 @@ protected:
 private:
 	/** Store PMX options into SourceNode for Translator to read */
 	void StoreOptionsToSourceNode(UInterchangeBaseNodeContainer* BaseNodeContainer) const;
+
+	/** Update physics cache with current pipeline options (called after Translator has created cache) */
+	void UpdatePhysicsCacheOptions() const;
 
 	/** Create factory nodes for textures */
 	void CreateTextureFactoryNodes(UInterchangeBaseNodeContainer* BaseNodeContainer) const;
