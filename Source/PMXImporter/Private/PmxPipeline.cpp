@@ -44,6 +44,7 @@ namespace PmxPipelineAttributeKeys
 	const FString UseMipmap = TEXT("PMX:UseMipmap");
 	const FString SphBlendFactor = TEXT("PMX:SphBlendFactor");
 	const FString SpaBlendFactor = TEXT("PMX:SpaBlendFactor");
+	const FString ParentMaterial = TEXT("PMX:ParentMaterial");
 	const FString PhysicsType2Mode = TEXT("PMX:PhysicsType2Mode");
 	const FString PhysicsMassScale = TEXT("PMX:PhysicsMassScale");
 	const FString PhysicsDampingScale = TEXT("PMX:PhysicsDampingScale");
@@ -61,6 +62,10 @@ namespace PmxPipelineAttributeKeys
 	const FString MarkSharpEdges = TEXT("PMX:MarkSharpEdges");
 	const FString SharpEdgeAngle = TEXT("PMX:SharpEdgeAngle");
 	const FString ImportAddUV2AsVertexColors = TEXT("PMX:ImportAddUV2AsVertexColors");
+	// Mesh Build options
+	const FString RecomputeNormals = TEXT("PMX:RecomputeNormals");
+	const FString RecomputeTangents = TEXT("PMX:RecomputeTangents");
+	const FString UseMikkTSpace = TEXT("PMX:UseMikkTSpace");
 }
 
 UPmxPipeline::UPmxPipeline()
@@ -155,6 +160,14 @@ void UPmxPipeline::StoreOptionsToSourceNode(UInterchangeBaseNodeContainer* BaseN
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::UseMipmap, bUseMipmap);
 	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::SphBlendFactor, SphBlendFactor);
 	SourceNode->AddFloatAttribute(PmxPipelineAttributeKeys::SpaBlendFactor, SpaBlendFactor);
+	// Always store ParentMaterial path using GetAssetPathString() for proper format
+	SourceNode->AddStringAttribute(PmxPipelineAttributeKeys::ParentMaterial, ParentMaterial.GetAssetPathString());
+	UE_LOG(LogPMXImporter, Display, TEXT("PmxPipeline: Storing ParentMaterial='%s'"), *ParentMaterial.GetAssetPathString());
+
+	// Mesh Build options
+	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::RecomputeNormals, bRecomputeNormals);
+	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::RecomputeTangents, bRecomputeTangents);
+	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::UseMikkTSpace, bUseMikkTSpace);
 
 	// Advanced options
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::CleanModel, bCleanModel);
@@ -256,8 +269,13 @@ void UPmxPipeline::ConfigureFactoryNodes(UInterchangeBaseNodeContainer* BaseNode
 				// Enable physics asset creation if physics import is enabled
 				SkeletalMeshNode->SetCustomCreatePhysicsAsset(bImportPhysics);
 
-				UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Configured SkeletalMeshFactoryNode '%s' (Morphs=%d, Physics=%d)"),
-					*NodeUid, bImportMorphs, bImportPhysics);
+				// Apply Mesh Build options
+				SkeletalMeshNode->SetCustomRecomputeNormals(bRecomputeNormals);
+				SkeletalMeshNode->SetCustomRecomputeTangents(bRecomputeTangents);
+				SkeletalMeshNode->SetCustomUseMikkTSpace(bUseMikkTSpace);
+
+				UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Configured SkeletalMeshFactoryNode '%s' (Morphs=%d, Physics=%d, RecomputeNormals=%d, RecomputeTangents=%d, MikkTSpace=%d)"),
+					*NodeUid, bImportMorphs, bImportPhysics, bRecomputeNormals, bRecomputeTangents, bUseMikkTSpace);
 			}
 		});
 
@@ -277,7 +295,7 @@ void UPmxPipeline::ConfigureFactoryNodes(UInterchangeBaseNodeContainer* BaseNode
 
 void UPmxPipeline::CreateTextureFactoryNodes(UInterchangeBaseNodeContainer* BaseNodeContainer) const
 {
-    // 컨테이너 변경을 동반하는 작업이므로 먼저 스냅샷(포인터)을 수집한다.
+    // Collect node snapshots first since we'll be modifying the container
     TArray<UInterchangeTexture2DNode*> TextureNodes;
     TextureNodes.Reserve(64);
     BaseNodeContainer->IterateNodesOfType<UInterchangeTexture2DNode>(
@@ -293,35 +311,35 @@ void UPmxPipeline::CreateTextureFactoryNodes(UInterchangeBaseNodeContainer* Base
     {
         const FString NodeUid = TextureNode->GetUniqueID();
 
-        // 팩토리 노드 UID 생성
+        // Generate factory node UID
         const FString FactoryUid = UInterchangeTextureFactoryNode::GetTextureFactoryNodeUidFromTextureNodeUid(NodeUid);
 
-        // 이미 존재하면 스킵
+        // Skip if already exists
         if (BaseNodeContainer->IsNodeUidValid(FactoryUid))
         {
             continue;
         }
 
-        // 팩토리 노드 생성 및 초기화
+        // Create and initialize factory node
         UInterchangeTexture2DFactoryNode* FactoryNode = NewObject<UInterchangeTexture2DFactoryNode>(BaseNodeContainer);
         FactoryNode->InitializeTextureNode(FactoryUid, TextureNode->GetDisplayLabel(), TextureNode->GetDisplayLabel(), BaseNodeContainer);
 
-        // 번역 노드 UID 설정 (페이로드 검색에 필요)
+        // Set translated node UID (required for payload retrieval)
         FactoryNode->SetCustomTranslatedTextureNodeUid(NodeUid);
 
-        // 양방향 연결
+        // Bidirectional connection
         FactoryNode->AddTargetNodeUid(NodeUid);
         TextureNode->AddTargetNodeUid(FactoryUid);
 
-        // 속성 복사
+        // Copy attributes
         bool bSRGB = false;
         if (TextureNode->GetCustomSRGB(bSRGB))
         {
             FactoryNode->SetCustomSRGB(bSRGB, false);
         }
 
-        // 밉맵 설정 (파이프라인 옵션)
-        // toon 텍스처 또는 작은 텍스처 감지 (mipmap 생성 실패 방지)
+        // Mipmap settings (pipeline option)
+        // Detect toon/small textures to prevent mipmap generation failure
         FString TextureDisplayLabel = TextureNode->GetDisplayLabel();
         bool bIsToonOrSmallTexture = TextureDisplayLabel.Contains(TEXT("toon"), ESearchCase::IgnoreCase) ||
                                        TextureDisplayLabel.Contains(TEXT("表情")) ||
@@ -354,7 +372,7 @@ void UPmxPipeline::CreateTextureFactoryNodes(UInterchangeBaseNodeContainer* Base
 
 void UPmxPipeline::CreateMaterialFactoryNodes(UInterchangeBaseNodeContainer* BaseNodeContainer) const
 {
-    // 컨테이너 변경을 동반하는 작업이므로 먼저 스냅샷(포인터)을 수집한다.
+    // Collect node snapshots first since we'll be modifying the container
     TArray<UInterchangeMaterialInstanceNode*> MaterialNodes;
     MaterialNodes.Reserve(64);
     BaseNodeContainer->IterateNodesOfType<UInterchangeMaterialInstanceNode>(
@@ -370,38 +388,38 @@ void UPmxPipeline::CreateMaterialFactoryNodes(UInterchangeBaseNodeContainer* Bas
     {
         const FString NodeUid = MaterialNode->GetUniqueID();
 
-        // 팩토리 노드 UID 생성
+        // Generate factory node UID
         const FString FactoryUid = UInterchangeBaseMaterialFactoryNode::GetMaterialFactoryNodeUidFromMaterialNodeUid(NodeUid);
 
-        // 이미 존재하면 스킵
+        // Skip if already exists
         if (BaseNodeContainer->IsNodeUidValid(FactoryUid))
         {
             continue;
         }
 
-        // 팩토리 노드 생성
+        // Create factory node
         UInterchangeMaterialInstanceFactoryNode* FactoryNode = NewObject<UInterchangeMaterialInstanceFactoryNode>(BaseNodeContainer);
 
-        // 노드 설정
+        // Configure node
         BaseNodeContainer->SetNodeParentUid(FactoryUid, TEXT(""));
         FactoryNode->InitializeNode(FactoryUid, MaterialNode->GetDisplayLabel(), EInterchangeNodeContainerType::FactoryData);
         BaseNodeContainer->AddNode(FactoryNode);
 
-        // 양방향 연결
+        // Bidirectional connection
         FactoryNode->AddTargetNodeUid(NodeUid);
         MaterialNode->AddTargetNodeUid(FactoryUid);
 
-        // 부모 머티리얼 경로 복사
+        // Copy parent material path
         FString ParentPath;
         if (MaterialNode->GetCustomParent(ParentPath))
         {
             FactoryNode->SetCustomParent(ParentPath);
         }
 
-        // 인스턴스 클래스 설정 (에디터에서 MaterialInstanceConstant 사용)
+        // Set instance class (use MaterialInstanceConstant in editor)
         FactoryNode->SetCustomInstanceClassName(UMaterialInstanceConstant::StaticClass()->GetPathName());
 
-        // 텍스처 의존성 추가
+        // Add texture dependencies
         FString TextureUid;
         if (MaterialNode->GetTextureParameterValue(TEXT("BaseColorTexture"), TextureUid))
         {
@@ -742,10 +760,19 @@ void UPmxPipeline::FilterPropertiesFromTranslatedData(UInterchangeBaseNodeContai
 		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, PhysicsDampingScale));
 	}
 
-	// Hide morph option if not importing mesh
+	// Hide mesh build options and morph option if not importing mesh
 	if (!bImportMesh)
 	{
 		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, bImportMorphs));
+		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, bRecomputeNormals));
+		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, bRecomputeTangents));
+		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, bUseMikkTSpace));
+	}
+
+	// Hide MikkTSpace option if not recomputing tangents
+	if (!bRecomputeTangents)
+	{
+		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, bUseMikkTSpace));
 	}
 
 	// Hide sharp edge angle if not marking sharp edges

@@ -28,14 +28,14 @@ enum class EPmxPhysicsType2Handling : uint8
 	Skip                 // Skip Type 2 bodies entirely
 };
 
-// Constraint 설정 모드
+// Constraint configuration mode
 UENUM(BlueprintType)
 enum class EPmxConstraintMode : uint8
 {
-	/** PMX 파일의 Joint 설정 사용 (MaxAngularLimit 클램프 적용 가능) */
+	/** Use PMX file's Joint settings (MaxAngularLimit clamp may apply) */
 	UsePmxSettings UMETA(DisplayName = "Use PMX Settings"),
 
-	/** 모든 Constraint를 일괄 설정으로 덮어씀 */
+	/** Override all Constraints with uniform settings */
 	OverrideAll UMETA(DisplayName = "Override All")
 };
 
@@ -85,12 +85,16 @@ struct FPmxImportOptions
     // Material options
     UPROPERTY()
     bool bUseMipmap = true;
-    
+
     UPROPERTY()
     float SphBlendFactor = 1.0f;
-    
+
     UPROPERTY()
     float SpaBlendFactor = 1.0f;
+
+    // Parent material path for material instances (empty = use CVar default)
+    UPROPERTY()
+    FString ParentMaterialPath;
     
     // Bone options
     UPROPERTY()

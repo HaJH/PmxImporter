@@ -266,10 +266,10 @@ bool FPmxReader::ReadString(FString& OutString, bool bUTF8)
 	
 	if (!bUTF8)
 	{
-		// PMX header requested UTF-16LE. 일부 익스포터가 길이를 UTF-16 코드 유닛 수로 기록하거나, 실제로 UTF-8로 저장하는 경우가 있음.
-		// 길이가 홀수인 경우, 다음 순서로 안전하게 시도:
-		// 1) 동일 길이로 UTF-8 디코드 시도(성공 시 인코딩 불일치 경고 후 사용)
-		// 2) UTF-16 코드 유닛 수로 간주(2배 바이트)하여 시도
+		// PMX header requested UTF-16LE. Some exporters record length as UTF-16 code unit count, or actually save as UTF-8.
+		// For odd byte length, try safely in order:
+		// 1) Try UTF-8 decode with same length (use with encoding mismatch warning on success)
+		// 2) Treat as UTF-16 code unit count (2x bytes)
 		if ((ByteLength & 1) != 0)
 		{
 			// Try UTF-8 with current ByteLength without committing position

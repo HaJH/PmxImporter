@@ -15,12 +15,26 @@ static TAutoConsoleVariable<FString> CVarPMXImporterParentMaterial(
 	TEXT("Parent material path for PMX Material Instances. Default = /PMXImporter/M_PMX_Base.M_PMX_Base"),
 	ECVF_Default);
 
-void FPmxMaterialMapping::CreateMaterials(const FPmxModel& PmxModel, const TMap<int32, FString>& TextureUidMap, 
-	UInterchangeBaseNodeContainer& BaseNodeContainer, TArray<FString>& OutMaterialUids, TArray<FString>& OutSlotNames)
+void FPmxMaterialMapping::CreateMaterials(const FPmxModel& PmxModel, const TMap<int32, FString>& TextureUidMap,
+	UInterchangeBaseNodeContainer& BaseNodeContainer, TArray<FString>& OutMaterialUids, TArray<FString>& OutSlotNames,
+	const FString& InParentMaterialPath)
 {
 	OutMaterialUids.Reserve(PmxModel.Materials.Num());
 	OutSlotNames.Reserve(PmxModel.Materials.Num());
-	
+
+	// Determine parent material path: Pipeline setting takes priority, CVar as fallback
+	FString ParentMaterialPath = InParentMaterialPath;
+	ParentMaterialPath.TrimStartAndEndInline();
+	UE_LOG(LogPMXImporter, Display, TEXT("PMX MaterialMapping: InParentMaterialPath='%s'"), *InParentMaterialPath);
+	if (ParentMaterialPath.IsEmpty())
+	{
+		// Fallback to CVar default
+		ParentMaterialPath = CVarPMXImporterParentMaterial.GetValueOnAnyThread();
+		ParentMaterialPath.TrimStartAndEndInline();
+		UE_LOG(LogPMXImporter, Display, TEXT("PMX MaterialMapping: Using CVar fallback='%s'"), *ParentMaterialPath);
+	}
+	UE_LOG(LogPMXImporter, Display, TEXT("PMX MaterialMapping: Final ParentMaterialPath='%s'"), *ParentMaterialPath);
+
 	// Track used labels to ensure uniqueness
 	TMap<FString, int32> UsedLabels;
 
@@ -28,7 +42,7 @@ void FPmxMaterialMapping::CreateMaterials(const FPmxModel& PmxModel, const TMap<
 	int32 CountTwoSided = 0;
 	int32 CountTranslucent = 0;
 	int32 CountMasked = 0;
-	
+
 	for (int32 MatIdx = 0; MatIdx < PmxModel.Materials.Num(); ++MatIdx)
 	{
 		const FPmxMaterial& PmxMat = PmxModel.Materials[MatIdx];
@@ -66,16 +80,14 @@ void FPmxMaterialMapping::CreateMaterials(const FPmxModel& PmxModel, const TMap<
 		UE_LOG(LogPMXImporter, Verbose, TEXT("PMX Translator: Create MI Node Display='%s' SlotLabel='%s' NodeUid='%s'"), *DisplayLabel, *UniqueLabel, *MiNodeUid);
 		if (ensure(MiNode))
 		{
-			FString ParentPath = CVarPMXImporterParentMaterial.GetValueOnAnyThread();
-			ParentPath.TrimStartAndEndInline();
-			if (!ParentPath.IsEmpty())
+			if (!ParentMaterialPath.IsEmpty())
 			{
-				MiNode->SetCustomParent(ParentPath);
-				UE_LOG(LogPMXImporter, Display, TEXT("PMX Translator: Set parent material to '%s' for MI '%s'"), *ParentPath, *DisplayLabel);
+				MiNode->SetCustomParent(ParentMaterialPath);
+				UE_LOG(LogPMXImporter, Display, TEXT("PMX Translator: Set parent material to '%s' for MI '%s'"), *ParentMaterialPath, *DisplayLabel);
 			}
 			else
 			{
-				UE_LOG(LogPMXImporter, Warning, TEXT("PMX Translator: No parent material path specified in CVar for MI '%s'"), *DisplayLabel);
+				UE_LOG(LogPMXImporter, Warning, TEXT("PMX Translator: No parent material path specified for MI '%s'"), *DisplayLabel);
 			}
 
 			// ---- IM4U-inspired mappings ----

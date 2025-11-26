@@ -565,7 +565,7 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 		return ELinearConstraintMotion::LCM_Limited;
 	};
 
-	// Set linear limits (ProfileInstance 직접 설정만 사용 - SetXMotion() 함수는 ConstraintHandle이 유효할 때만 동작)
+	// Set linear limits (use ProfileInstance directly - SetXMotion() only works when ConstraintHandle is valid)
 	CI.ProfileInstance.LinearLimit.XMotion = SetLinearMotion(MinMove.X, MaxMove.X);
 	CI.ProfileInstance.LinearLimit.YMotion = SetLinearMotion(MinMove.Y, MaxMove.Y);
 	CI.ProfileInstance.LinearLimit.ZMotion = SetLinearMotion(MinMove.Z, MaxMove.Z);
@@ -601,7 +601,7 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 
 	// Map PMX XYZ rotation to UE Swing1/Swing2/Twist
 	// PMX: X=Roll, Y=Pitch, Z=Yaw -> UE: Twist=X, Swing1=Y, Swing2=Z
-	// (ProfileInstance 직접 설정만 사용 - SetAngularXMotion() 함수는 ConstraintHandle이 유효할 때만 동작)
+	// (use ProfileInstance directly - SetAngularXMotion() only works when ConstraintHandle is valid)
 
 	// Set angular limits with optional clamping
 	float TwistLimit = FMath::Max(FMath::Abs(MinRotDeg.X), FMath::Abs(MaxRotDeg.X));
@@ -765,10 +765,10 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 	CI.SetRefOrientation(EConstraintFrame::Frame1, PriAxis, SecAxis);
 	CI.SetRefOrientation(EConstraintFrame::Frame2, PriAxis, SecAxis);
 
-	// CRITICAL: DefaultProfile과 ProfileInstance 동기화
-	// 이것이 없으면 Serialize 시 DefaultProfile의 빈 값이 ProfileInstance를 덮어씀
-	// 에디터에서 수동으로 값을 설정하면 PostEditChangeProperty가 이를 처리하지만,
-	// 코드에서 직접 생성할 때는 명시적으로 호출해야 함
+	// CRITICAL: Sync DefaultProfile with ProfileInstance
+	// Without this, empty DefaultProfile values will overwrite ProfileInstance during Serialize
+	// When setting values manually in editor, PostEditChangeProperty handles this,
+	// but when creating via code, we must call it explicitly
 #if WITH_EDITOR
 	Constraint->UpdateProfileInstance();
 #endif

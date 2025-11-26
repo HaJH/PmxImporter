@@ -193,6 +193,16 @@ bool UPmxTranslator::Translate(UInterchangeBaseNodeContainer& BaseNodeContainer)
         {
             ImportOptions.SpaBlendFactor = FloatValue;
         }
+        FString StringValue;
+        if (SourceNode->GetStringAttribute(TEXT("PMX:ParentMaterial"), StringValue))
+        {
+            ImportOptions.ParentMaterialPath = StringValue;
+            UE_LOG(LogPMXImporter, Display, TEXT("PmxTranslator: Read ParentMaterial='%s' from SourceNode"), *StringValue);
+        }
+        else
+        {
+            UE_LOG(LogPMXImporter, Display, TEXT("PmxTranslator: No ParentMaterial attribute found in SourceNode"));
+        }
 
         // Advanced options
         if (SourceNode->GetBooleanAttribute(TEXT("PMX:CleanModel"), bValue))
@@ -540,10 +550,10 @@ void UPmxTranslator::ImportMeshSection(const FPmxModel& PmxModel, UInterchangeBa
     // Import textures
     TMap<int32, FString> TextureUidMap;
     ImportTextures(PmxModel, GetSourceData()->GetFilename(), BaseNodeContainer, TextureUidMap);
-    
+
     // Import materials
     TArray<FString> SlotNames;
-    FPmxMaterialMapping::CreateMaterials(PmxModel, TextureUidMap, BaseNodeContainer, OutMaterialUids, SlotNames);
+    FPmxMaterialMapping::CreateMaterials(PmxModel, TextureUidMap, BaseNodeContainer, OutMaterialUids, SlotNames, ImportOptions.ParentMaterialPath);
     
     // Create SkeletalMesh factory node
     FString ModelName = PmxModel.Header.ModelName.IsEmpty() ? TEXT("PMX_Root") : PmxModel.Header.ModelName;
