@@ -5,6 +5,9 @@
 #include "CoreMinimal.h"
 #include "InterchangePipelineBase.h"
 #include "PmxTranslator.h"
+
+#include "InterchangeSkeletalMeshFactoryNode.h"
+
 #include "PmxPipeline.generated.h"
 
 class UInterchangeBaseNodeContainer;
@@ -95,10 +98,6 @@ public:
 	/** Apply bone fixed axis constraints. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skeleton", meta = (EditCondition = "bImportArmature", ToolTip = "Apply bone fixed axis constraints"))
 	bool bApplyBoneFixedAxis = false;
-
-	/** Use underscore for bone name separator instead of dot. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skeleton", meta = (EditCondition = "bImportArmature && bRenameLRBones", ToolTip = "Use underscore for bone name separator instead of dot"))
-	bool bUseUnderscore = false;
 
 	// =============================================
 	// Physics Category (Basic Options)
@@ -297,6 +296,8 @@ private:
 
 	/** Build physics asset from PMX physics data */
 	void BuildPmxPhysicsAsset(UPhysicsAsset* PhysicsAsset, USkeletalMesh* SkeletalMesh, const FPmxPhysicsCache& PhysicsData) const;
+
+	void RenameLRBones(UInterchangeSkeletalMeshFactoryNode* SkeletalMeshFactoryNode) const;
 
 	/** Cached base node container for post-import access */
 	UPROPERTY(Transient)

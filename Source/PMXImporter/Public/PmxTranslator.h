@@ -106,9 +106,6 @@ struct FPmxImportOptions
     UPROPERTY()
     bool bRenameLRBones = false;
 
-    UPROPERTY()
-    bool bUseUnderscore = false;
-
     // Physics options
     UPROPERTY()
     EPmxPhysicsType2Handling PhysicsType2Mode = EPmxPhysicsType2Handling::ConvertToKinematic;
