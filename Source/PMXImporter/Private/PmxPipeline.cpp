@@ -112,37 +112,22 @@ void UPmxPipeline::RenameLRBones(UInterchangeSkeletalMeshFactoryNode* SkeletalMe
 
 	if (Skeleton)
 	{	
-		TArray<FName> RemovedBones;
-
-		// Get the reference skeleton
-		FReferenceSkeleton RefSkeleton = Skeleton->GetReferenceSkeleton();
-		
 		// Create the modifier
 		USkeletonModifier* SkeletonModifier = NewObject<USkeletonModifier>();
 		SkeletonModifier->SetSkeletalMesh(SkeletalMesh);
-		FReferenceSkeletonModifier RefSkeletonModifier(RefSkeleton, Skeleton);
 
-		const TArray<FMeshBoneInfo>& BoneInfoArray = RefSkeleton.GetRefBoneInfo();
-		// TArray<FName> AllBoneNames;
+		const TArray<FMeshBoneInfo>& BoneInfoArray = SkeletalMesh->GetRefSkeleton().GetRefBoneInfo();
+		
 		bool Changed = false;
 		for (const FMeshBoneInfo& BoneInfo : BoneInfoArray)
 		{
-			// AllBoneNames.Add(BoneInfo.Name);
-			// UE_LOG(LogPMXImporter, Warning, TEXT("BONE NAME: %s"), *BoneInfo.Name.ToString());
 			if (BoneInfo.Name.ToString().StartsWith(TEXT("左")))
 			{
-				// UE_LOG(LogPMXImporter, Warning, TEXT("L: %s , %s"), *BoneInfo.Name.ToString(), *(BoneInfo.Name.ToString().RightChop(1) + TEXT("_L")));
-				// SkeletonModifier.Rename(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_L")));
-				RemovedBones.Add(BoneInfo.Name);
-				SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_L")));
-				
+				SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_L")));	
 				Changed = true;
 			}
 			else if (BoneInfo.Name.ToString().StartsWith(TEXT("右")))
 			{
-				RemovedBones.Add(BoneInfo.Name);
-				// UE_LOG(LogPMXImporter, Warning, TEXT("R: %s , %s"), *BoneInfo.Name.ToString(), *(BoneInfo.Name.ToString().RightChop(1) + TEXT("_R")));
-				// SkeletonModifier.Rename(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_R")));
 				SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_R")));
 				Changed = true;
 			}
@@ -152,12 +137,6 @@ void UPmxPipeline::RenameLRBones(UInterchangeSkeletalMeshFactoryNode* SkeletalMe
 			SkeletalMesh->MarkPackageDirty();
 			Skeleton->MarkPackageDirty();
 			bool bSuccess = SkeletonModifier->CommitSkeletonToSkeletalMesh();
-			UE_LOG(LogPMXImporter, Warning, TEXT("SAVED : %d"), bSuccess);
-		}
-		// Clean up bones from skeleton
-		for (int i = 0; i < RemovedBones.Num(); i++) 
-		{
-			RefSkeletonModifier.Remove(RemovedBones[i], false);
 		}
 	}
 }
@@ -801,7 +780,6 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 			{
 				if (BodySetup->BoneName.ToString().StartsWith(TEXT("左")))
 				{
-					UE_LOG(LogPMXImporter, Log, TEXT("LEFT PHYSICS"));
 					BodySetup->BoneName = FName(BodySetup->BoneName.ToString().RightChop(1) + TEXT("_L"));
 					Changed = true;
 				}
@@ -817,6 +795,7 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 				// Force the physics asset to re-initialize constraints/bodies
 				PhysicsAsset->UpdateBodySetupIndexMap();
 				PhysicsAsset->UpdateBoundsBodiesArray();
+				PhysicsAsset->MarkPackageDirty();
 			}
 			
 		}
