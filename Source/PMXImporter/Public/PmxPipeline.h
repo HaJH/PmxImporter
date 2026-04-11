@@ -5,6 +5,9 @@
 #include "CoreMinimal.h"
 #include "InterchangePipelineBase.h"
 #include "PmxTranslator.h"
+
+#include "InterchangeSkeletalMeshFactoryNode.h"
+
 #include "PmxPipeline.generated.h"
 
 class UInterchangeBaseNodeContainer;
@@ -297,6 +300,8 @@ private:
 
 	/** Build physics asset from PMX physics data */
 	void BuildPmxPhysicsAsset(UPhysicsAsset* PhysicsAsset, USkeletalMesh* SkeletalMesh, const FPmxPhysicsCache& PhysicsData) const;
+
+	void RenameLRBones(UInterchangeSkeletalMeshFactoryNode* SkeletalMeshFactoryNode) const;
 
 	/** Cached base node container for post-import access */
 	UPROPERTY(Transient)

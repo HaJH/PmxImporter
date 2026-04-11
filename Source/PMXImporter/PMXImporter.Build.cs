@@ -19,7 +19,8 @@ public class PMXImporter : ModuleRules
             "InterchangeFactoryNodes",
             "InterchangeCommonParser",
             "PhysicsCore",
-            "MeshDescription"
+            "MeshDescription",
+            "SkeletalMeshModifiers",
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]
@@ -37,7 +38,8 @@ public class PMXImporter : ModuleRules
             "AnimationCore",
             "AssetRegistry",
             // For image resizing/utilities used by the translator when handling texture payloads
-            "ImageCore"
+            "ImageCore",
+            "SkeletalMeshModifiers",
         });
 
         PublicIncludePaths.AddRange(new string[]
