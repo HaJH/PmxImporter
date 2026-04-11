@@ -127,10 +127,6 @@ bool UPmxTranslator::Translate(UInterchangeBaseNodeContainer& BaseNodeContainer)
         {
             ImportOptions.bApplyBoneFixedAxis = bValue;
         }
-        if (SourceNode->GetBooleanAttribute(TEXT("PMX:UseUnderscore"), bValue))
-        {
-            ImportOptions.bUseUnderscore = bValue;
-        }
 
         // Physics options
         if (SourceNode->GetBooleanAttribute(TEXT("PMX:ImportPhysics"), bValue))

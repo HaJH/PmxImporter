@@ -99,10 +99,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skeleton", meta = (EditCondition = "bImportArmature", ToolTip = "Apply bone fixed axis constraints"))
 	bool bApplyBoneFixedAxis = false;
 
-	/** Use underscore for bone name separator instead of dot. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skeleton", meta = (EditCondition = "bImportArmature && bRenameLRBones", ToolTip = "Use underscore for bone name separator instead of dot"))
-	bool bUseUnderscore = false;
-
 	// =============================================
 	// Physics Category (Basic Options)
 	// =============================================

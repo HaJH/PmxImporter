@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Jeonghyeon Ha. All Rights Reserved.
+﻿// Copyright (c) 2025 Jeonghyeon Ha. All Rights Reserved.
 
 #include "PmxPipeline.h"
 #include "LogPMXImporter.h"
@@ -216,7 +216,6 @@ void UPmxPipeline::StoreOptionsToSourceNode(UInterchangeBaseNodeContainer* BaseN
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::RenameLRBones, bRenameLRBones);
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::FixIKLinks, bFixIKLinks);
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::ApplyBoneFixedAxis, bApplyBoneFixedAxis);
-	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::UseUnderscore, bUseUnderscore);
 
 	// Physics options
 	SourceNode->AddBooleanAttribute(PmxPipelineAttributeKeys::ImportPhysics, bImportPhysics);
@@ -870,7 +869,6 @@ void UPmxPipeline::FilterPropertiesFromTranslatedData(UInterchangeBaseNodeContai
 		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, bRenameLRBones));
 		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, bFixIKLinks));
 		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, bApplyBoneFixedAxis));
-		HideProperty(this, this, GET_MEMBER_NAME_CHECKED(UPmxPipeline, bUseUnderscore));
 	}
 
 	// Hide physics sub-options if not importing physics
