@@ -729,7 +729,6 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 		return;
 	}
 
-
 	// Handle Physics Asset creation
 	if (UPhysicsAsset* PhysicsAsset = Cast<UPhysicsAsset>(CreatedAsset))
 	{
