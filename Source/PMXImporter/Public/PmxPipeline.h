@@ -297,7 +297,8 @@ private:
 	/** Build physics asset from PMX physics data */
 	void BuildPmxPhysicsAsset(UPhysicsAsset* PhysicsAsset, USkeletalMesh* SkeletalMesh, const FPmxPhysicsCache& PhysicsData) const;
 
-	void RenameLRBones(UInterchangeSkeletalMeshFactoryNode* SkeletalMeshFactoryNode) const;
+	/** Rename chiral bones with _L _R Suffix */
+	void RenameLRBones(USkeletalMesh* SkeletalMesh) const;
 
 	/** Cached base node container for post-import access */
 	UPROPERTY(Transient)
