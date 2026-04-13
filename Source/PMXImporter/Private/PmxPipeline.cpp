@@ -86,26 +86,10 @@ bool UPmxPipeline::CanExecuteOnAnyThread(EInterchangePipelineTask PipelineTask)
 	return true;
 }
 
-void UPmxPipeline::RenameLRBones(UInterchangeSkeletalMeshFactoryNode* SkeletalMeshFactoryNode) const
+void UPmxPipeline::RenameLRBones(USkeletalMesh* SkeletalMesh) const
 {
 	if (!bRenameLRBones)
 	{
-		return;
-	}
-
-
-	// Get the reference to the created SkeletalMesh
-	FSoftObjectPath SkeletalMeshPath;
-	if (!SkeletalMeshFactoryNode->GetCustomReferenceObject(SkeletalMeshPath))
-	{
-		UE_LOG(LogPMXImporter, Warning, TEXT("UPmxPipeline: SkeletalMeshFactoryNode has no ReferenceObject"));
-		return;
-	}
-
-	USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(SkeletalMeshPath.TryLoad());
-	if (!SkeletalMesh)
-	{
-		UE_LOG(LogPMXImporter, Warning, TEXT("UPmxPipeline: Failed to load SkeletalMesh from '%s'"), *SkeletalMeshPath.ToString());
 		return;
 	}
 
@@ -113,7 +97,6 @@ void UPmxPipeline::RenameLRBones(UInterchangeSkeletalMeshFactoryNode* SkeletalMe
 
 	if (Skeleton)
 	{	
-		// Create the modifier
 		USkeletonModifier* SkeletonModifier = NewObject<USkeletonModifier>();
 		SkeletonModifier->SetSkeletalMesh(SkeletalMesh);
 
@@ -130,6 +113,7 @@ void UPmxPipeline::RenameLRBones(UInterchangeSkeletalMeshFactoryNode* SkeletalMe
 			else if (BoneInfo.Name.ToString().StartsWith(TEXT("右")))
 			{
 				SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_R")));
+				
 				Changed = true;
 			}
 		}
@@ -138,6 +122,54 @@ void UPmxPipeline::RenameLRBones(UInterchangeSkeletalMeshFactoryNode* SkeletalMe
 			SkeletalMesh->MarkPackageDirty();
 			Skeleton->MarkPackageDirty();
 			bool bSuccess = SkeletonModifier->CommitSkeletonToSkeletalMesh();
+			
+			TArray<FName> SkeletonBones;
+			const FReferenceSkeleton& RefSkeleton = Skeleton->GetReferenceSkeleton();
+			for (int32 BoneIndex = 0; BoneIndex < RefSkeleton.GetRawBoneNum(); ++BoneIndex)
+			{
+				SkeletonBones.Add(RefSkeleton.GetBoneName(BoneIndex));
+			}
+
+			if (SkeletonBones.Num() != 0)
+			{
+				// Loop through all SkeletalMeshes and remove the bones they use from our list
+			
+				const FReferenceSkeleton& MeshRefSkeleton = SkeletalMesh->GetRefSkeleton();
+
+				for (int32 BoneIndex = 0; BoneIndex < MeshRefSkeleton.GetRawBoneNum(); ++BoneIndex)
+				{
+					SkeletonBones.Remove(MeshRefSkeleton.GetBoneName(BoneIndex));
+					if (SkeletonBones.Num() == 0)
+					{
+						break;
+					}
+				}
+				if (SkeletonBones.Num() == 0)
+				{
+					// break;
+				}
+			}
+
+			//Remove bones that are a parent to bones we aren't removing
+			for (int32 BoneIndex = RefSkeleton.GetRawBoneNum() - 1; BoneIndex >= 0; --BoneIndex)
+			{
+				FName CurrBoneName = RefSkeleton.GetBoneName(BoneIndex);
+				if (!SkeletonBones.Contains(CurrBoneName))
+				{
+					//We aren't removing this bone, so remove parent from list of bones to remove too
+					int32 ParentIndex = RefSkeleton.GetParentIndex(BoneIndex);
+					if (ParentIndex != INDEX_NONE)
+					{
+						SkeletonBones.Remove(RefSkeleton.GetBoneName(ParentIndex));
+					}
+				}
+			}
+			
+			// If we have any bones left they are unused
+			if (SkeletonBones.Num() > 0)
+			{
+				Skeleton->RemoveBonesFromSkeleton(SkeletonBones, true);			
+			}
 		}
 	}
 }
@@ -687,6 +719,15 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 				UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Configured MaterialInstance '%s' from Node '%s'"), *MI->GetName(), *MaterialNode->GetDisplayLabel());
 			}
 		}
+	
+		return;
+	}
+
+	if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(CreatedAsset)){
+
+		RenameLRBones(SkeletalMesh);
+
+		return;
 	}
 
 	// Handle Physics Asset creation
@@ -800,21 +841,10 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 			}
 			
 		}
+
+		return;
 	}
 
-	// Change bone names at the end
-	{
-		const FString SkeletalMeshUid = TEXT("/PMX/SkeletalMesh");
-		UInterchangeSkeletalMeshFactoryNode* SkeletalMeshFactoryNode =
-			Cast<UInterchangeSkeletalMeshFactoryNode>(BaseNodeContainer->GetFactoryNode(SkeletalMeshUid));
-
-		if (!SkeletalMeshFactoryNode)
-		{
-			UE_LOG(LogPMXImporter, Warning, TEXT("UPmxPipeline: Could not find SkeletalMeshFactoryNode '%s'"), *SkeletalMeshUid);
-			return;
-		}
-		RenameLRBones(SkeletalMeshFactoryNode);
-	}
 }
 
 void UPmxPipeline::BuildPmxPhysicsAsset(UPhysicsAsset* PhysicsAsset, USkeletalMesh* SkeletalMesh, const FPmxPhysicsCache& PhysicsData) const
