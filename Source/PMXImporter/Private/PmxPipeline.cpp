@@ -94,83 +94,74 @@ void UPmxPipeline::RenameLRBones(USkeletalMesh* SkeletalMesh) const
 	}
 
 	USkeleton* Skeleton = SkeletalMesh->GetSkeleton();
+	if (!Skeleton)
+	{
+		return;
+	}
 
-	if (Skeleton)
-	{	
-		USkeletonModifier* SkeletonModifier = NewObject<USkeletonModifier>();
-		SkeletonModifier->SetSkeletalMesh(SkeletalMesh);
+	USkeletonModifier* SkeletonModifier = NewObject<USkeletonModifier>();
+	SkeletonModifier->SetSkeletalMesh(SkeletalMesh);
 
-		const TArray<FMeshBoneInfo>& BoneInfoArray = SkeletalMesh->GetRefSkeleton().GetRefBoneInfo();
-		
-		bool Changed = false;
-		for (const FMeshBoneInfo& BoneInfo : BoneInfoArray)
+	const TArray<FMeshBoneInfo>& BoneInfoArray = SkeletalMesh->GetRefSkeleton().GetRefBoneInfo();
+
+	bool bChanged = false;
+	for (const FMeshBoneInfo& BoneInfo : BoneInfoArray)
+	{
+		if (BoneInfo.Name.ToString().StartsWith(TEXT("左")))
 		{
-			if (BoneInfo.Name.ToString().StartsWith(TEXT("左")))
+			SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_L")));
+			bChanged = true;
+		}
+		else if (BoneInfo.Name.ToString().StartsWith(TEXT("右")))
+		{
+			SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_R")));
+			bChanged = true;
+		}
+	}
+
+	if (!bChanged)
+	{
+		return;
+	}
+
+	SkeletalMesh->MarkPackageDirty();
+	Skeleton->MarkPackageDirty();
+	SkeletonModifier->CommitSkeletonToSkeletalMesh();
+
+	// After rename, the Skeleton still holds the original 左/右 bones as orphans.
+	// Collect bones that remain in the Skeleton but are no longer referenced by
+	// the SkeletalMesh, keep any parent of a retained bone, and remove the rest.
+	const FReferenceSkeleton& RefSkeleton = Skeleton->GetReferenceSkeleton();
+	const FReferenceSkeleton& MeshRefSkeleton = SkeletalMesh->GetRefSkeleton();
+
+	TArray<FName> OrphanedBones;
+	OrphanedBones.Reserve(RefSkeleton.GetRawBoneNum());
+	for (int32 BoneIndex = 0; BoneIndex < RefSkeleton.GetRawBoneNum(); ++BoneIndex)
+	{
+		OrphanedBones.Add(RefSkeleton.GetBoneName(BoneIndex));
+	}
+
+	for (int32 BoneIndex = 0; BoneIndex < MeshRefSkeleton.GetRawBoneNum() && OrphanedBones.Num() > 0; ++BoneIndex)
+	{
+		OrphanedBones.Remove(MeshRefSkeleton.GetBoneName(BoneIndex));
+	}
+
+	for (int32 BoneIndex = RefSkeleton.GetRawBoneNum() - 1; BoneIndex >= 0; --BoneIndex)
+	{
+		const FName CurrBoneName = RefSkeleton.GetBoneName(BoneIndex);
+		if (!OrphanedBones.Contains(CurrBoneName))
+		{
+			const int32 ParentIndex = RefSkeleton.GetParentIndex(BoneIndex);
+			if (ParentIndex != INDEX_NONE)
 			{
-				SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_L")));	
-				Changed = true;
-			}
-			else if (BoneInfo.Name.ToString().StartsWith(TEXT("右")))
-			{
-				SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_R")));
-				
-				Changed = true;
+				OrphanedBones.Remove(RefSkeleton.GetBoneName(ParentIndex));
 			}
 		}
-		if (Changed)
-		{
-			SkeletalMesh->MarkPackageDirty();
-			Skeleton->MarkPackageDirty();
-			bool bSuccess = SkeletonModifier->CommitSkeletonToSkeletalMesh();
-			
-			TArray<FName> SkeletonBones;
-			const FReferenceSkeleton& RefSkeleton = Skeleton->GetReferenceSkeleton();
-			for (int32 BoneIndex = 0; BoneIndex < RefSkeleton.GetRawBoneNum(); ++BoneIndex)
-			{
-				SkeletonBones.Add(RefSkeleton.GetBoneName(BoneIndex));
-			}
+	}
 
-			if (SkeletonBones.Num() != 0)
-			{
-				// Loop through all SkeletalMeshes and remove the bones they use from our list
-			
-				const FReferenceSkeleton& MeshRefSkeleton = SkeletalMesh->GetRefSkeleton();
-
-				for (int32 BoneIndex = 0; BoneIndex < MeshRefSkeleton.GetRawBoneNum(); ++BoneIndex)
-				{
-					SkeletonBones.Remove(MeshRefSkeleton.GetBoneName(BoneIndex));
-					if (SkeletonBones.Num() == 0)
-					{
-						break;
-					}
-				}
-				if (SkeletonBones.Num() == 0)
-				{
-					// break;
-				}
-			}
-
-			//Remove bones that are a parent to bones we aren't removing
-			for (int32 BoneIndex = RefSkeleton.GetRawBoneNum() - 1; BoneIndex >= 0; --BoneIndex)
-			{
-				FName CurrBoneName = RefSkeleton.GetBoneName(BoneIndex);
-				if (!SkeletonBones.Contains(CurrBoneName))
-				{
-					//We aren't removing this bone, so remove parent from list of bones to remove too
-					int32 ParentIndex = RefSkeleton.GetParentIndex(BoneIndex);
-					if (ParentIndex != INDEX_NONE)
-					{
-						SkeletonBones.Remove(RefSkeleton.GetBoneName(ParentIndex));
-					}
-				}
-			}
-			
-			// If we have any bones left they are unused
-			if (SkeletonBones.Num() > 0)
-			{
-				Skeleton->RemoveBonesFromSkeleton(SkeletonBones, true);			
-			}
-		}
+	if (OrphanedBones.Num() > 0)
+	{
+		Skeleton->RemoveBonesFromSkeleton(OrphanedBones, true);
 	}
 }
 
@@ -719,14 +710,13 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 				UE_LOG(LogPMXImporter, Verbose, TEXT("UPmxPipeline: Configured MaterialInstance '%s' from Node '%s'"), *MI->GetName(), *MaterialNode->GetDisplayLabel());
 			}
 		}
-	
+
 		return;
 	}
 
-	if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(CreatedAsset)){
-
+	if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(CreatedAsset))
+	{
 		RenameLRBones(SkeletalMesh);
-
 		return;
 	}
 
@@ -817,34 +807,32 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 
 		if (bRenameLRBones)
 		{
-			bool Changed = false;
+			bool bChanged = false;
 			for (USkeletalBodySetup* BodySetup : PhysicsAsset->SkeletalBodySetups)
 			{
 				if (BodySetup->BoneName.ToString().StartsWith(TEXT("左")))
 				{
 					BodySetup->BoneName = FName(BodySetup->BoneName.ToString().RightChop(1) + TEXT("_L"));
-					Changed = true;
+					bChanged = true;
 				}
 				else if (BodySetup->BoneName.ToString().StartsWith(TEXT("右")))
 				{
 					BodySetup->BoneName = FName(BodySetup->BoneName.ToString().RightChop(1) + TEXT("_R"));
-					Changed = true;
+					bChanged = true;
 				}
 			}
-			
-			if (Changed)
+
+			if (bChanged)
 			{
 				// Force the physics asset to re-initialize constraints/bodies
 				PhysicsAsset->UpdateBodySetupIndexMap();
 				PhysicsAsset->UpdateBoundsBodiesArray();
 				PhysicsAsset->MarkPackageDirty();
 			}
-			
 		}
 
 		return;
 	}
-
 }
 
 void UPmxPipeline::BuildPmxPhysicsAsset(UPhysicsAsset* PhysicsAsset, USkeletalMesh* SkeletalMesh, const FPmxPhysicsCache& PhysicsData) const
