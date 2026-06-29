@@ -10,6 +10,7 @@
 #include "Nodes/InterchangeSourceNode.h"
 #include "InterchangeSkeletalMeshFactoryNode.h"
 #include "InterchangeSkeletalMeshLodDataNode.h"
+#include "Types/InterchangeLODMeshData.h"
 #include "InterchangeMeshNode.h"
 #include "InterchangePhysicsAssetFactoryNode.h"
 #include "InterchangeTexture2DFactoryNode.h"
@@ -536,11 +537,12 @@ void UPmxPipeline::CreateMaterialFactoryNodes(UInterchangeBaseNodeContainer* Bas
                 }
 
                 // Get mesh nodes from LOD
-                TArray<FString> MeshUids;
-                LodDataNode->GetMeshUids(MeshUids);
+                TArray<FInterchangeLODMeshData> LODMeshDataArray;
+                LodDataNode->GetLODMeshDataArray(LODMeshDataArray);
 
-                for (const FString& MeshUid : MeshUids)
+                for (const FInterchangeLODMeshData& LODMeshData : LODMeshDataArray)
                 {
+                    const FString& MeshUid = LODMeshData.MeshUid;
                     const UInterchangeMeshNode* MeshNode =
                         Cast<UInterchangeMeshNode>(BaseNodeContainer->GetNode(MeshUid));
 
@@ -567,8 +569,7 @@ void UPmxPipeline::CreateMaterialFactoryNodes(UInterchangeBaseNodeContainer* Bas
                         SkeletalMeshNode->SetSlotMaterialDependencyUid(SlotName, MaterialFactoryUid);
 
                         // Add factory dependency to ensure materials are created before the mesh
-                        TArray<FString> FactoryDependencies;
-                        SkeletalMeshNode->GetFactoryDependencies(FactoryDependencies);
+                        const TSet<FString> FactoryDependencies = SkeletalMeshNode->GetFactoryDependencies();
                         if (!FactoryDependencies.Contains(MaterialFactoryUid))
                         {
                             SkeletalMeshNode->AddFactoryDependencyUid(MaterialFactoryUid);

@@ -14,6 +14,7 @@
 #include "InterchangeSkeletalMeshFactoryNode.h"
 #include "Engine/SkeletalMesh.h"
 #include "InterchangeSkeletalMeshLodDataNode.h"
+#include "Types/InterchangeLODMeshData.h"
 #include "InterchangeMeshNode.h"
 #include "InterchangeMaterialFactoryNode.h"
 #include "InterchangeTexture2DNode.h"
@@ -595,7 +596,7 @@ void UPmxTranslator::ImportMeshSection(const FPmxModel& PmxModel, UInterchangeBa
     }
     
     BaseNodeContainer.AddNode(MeshNode);
-    Lod0Node->AddMeshUid(OutMeshUid);
+    Lod0Node->AddLODMeshData(FInterchangeLODMeshData(OutMeshUid, FTransform::Identity));
 }
 
 void UPmxTranslator::ImportArmatureSection(const FPmxModel& PmxModel, UInterchangeBaseNodeContainer& BaseNodeContainer,
@@ -1021,7 +1022,7 @@ TOptional<UE::Interchange::FImportImage> UPmxTranslator::GetTexturePayloadData(c
     // Helper to try loading via Interchange texture translators
     auto TryLoadImage = [&](const FString& InPath, TOptional<FString>& InOutAltPath) -> TOptional<UE::Interchange::FImportImage>
     {
-        UE::Interchange::Private::FScopedTranslator LocalScopedTranslator(InPath, Results, AnalyticsHelper);
+        UE::Interchange::Private::FScopedTranslator LocalScopedTranslator(InPath, Results, AnalyticsHandler);
         const IInterchangeTexturePayloadInterface* LocalTextureTranslator = LocalScopedTranslator.GetPayLoadInterface<IInterchangeTexturePayloadInterface>();
         if (!LocalTextureTranslator)
         {
@@ -1273,7 +1274,7 @@ void UPmxTranslator::ImportTextures(const FPmxModel& PmxModel, const FString& Pm
             // Flat structure for root-level textures
             TexNodePath = FString::Printf(TEXT("/PMX/Textures/MMD_%s_%d"), *TexBaseName, TexIdx);
         }
-        UInterchangeTexture2DNode* Texture2DNode = UInterchangeTexture2DNode::Create(&BaseNodeContainer, *TexNodePath);
+        UInterchangeTexture2DNode* Texture2DNode = UInterchangeTexture2DNode::Create(&BaseNodeContainer, *TexNodePath, TexBaseName);
         
         if (Texture2DNode)
         {

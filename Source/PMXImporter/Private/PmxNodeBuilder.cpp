@@ -4,6 +4,7 @@
 
 #include "Nodes/InterchangeBaseNodeContainer.h"
 #include "InterchangeSceneNode.h"
+#include "InterchangeJointNode.h"
 #include "LogPMXImporter.h"
 #include "HAL/IConsoleManager.h"
 #include "PmxUtils.h"
@@ -43,7 +44,8 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 	}
 	
 	// Create a single Joint Root node to ensure a unified bone hierarchy for the Skeleton
-	UInterchangeSceneNode* RootJoint = NewObject<UInterchangeSceneNode>(&BaseNodeContainer);
+	// Must be a UInterchangeJointNode: the skeleton factory identifies joints by class, not specialized-type
+	UInterchangeSceneNode* RootJoint = NewObject<UInterchangeJointNode>(&BaseNodeContainer);
 	// Build a model-specific joints prefix to avoid UID collisions between imports
 	FString SafeModelName = PmxModel.Header.ModelName.IsEmpty() ? TEXT("PMX") : PmxModel.Header.ModelName;
 	// Sanitize name to ASCII token for UIDs
@@ -57,7 +59,6 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 	const FString JointsPrefix = FString::Printf(TEXT("/PMX/Joints/%s"), *SafeModelName);
 	const FString RootJointUid = JointsPrefix + TEXT("/Root");
 	RootJoint->InitializeNode(RootJointUid, TEXT("Root"), ContainerType::TranslatedScene);
-	RootJoint->AddSpecializedType(UE::Interchange::FSceneNodeStaticData::GetJointSpecializeTypeString());
 	RootJoint->SetCustomLocalTransform(&BaseNodeContainer, FTransform::Identity);
 	BaseNodeContainer.AddNode(RootJoint);
 	BaseNodeContainer.SetNodeParentUid(RootJoint->GetUniqueID(), RootNodeUid);
@@ -123,13 +124,12 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 	{
 		const FPmxBone& Bone = PmxModel.Bones[BoneIndex];
 
-		UInterchangeSceneNode* JointNode = NewObject<UInterchangeSceneNode>(&BaseNodeContainer);
+		// Must be a UInterchangeJointNode: the skeleton factory identifies joints by class, not specialized-type
+		UInterchangeSceneNode* JointNode = NewObject<UInterchangeJointNode>(&BaseNodeContainer);
 		const FString JointUid = FString::Printf(TEXT("%s/Bone_%d"), *JointsPrefix, BoneIndex);
 		const FString& BoneName = UniqueBoneNames[BoneIndex];  // Use pre-computed unique name
 
 		JointNode->InitializeNode(JointUid, *BoneName, ContainerType::TranslatedScene);
-		// Mark as Joint specialized type
-		JointNode->AddSpecializedType(UE::Interchange::FSceneNodeStaticData::GetJointSpecializeTypeString());
 
 		// Set local transform (bone position relative to parent, in UE space)
 		FVector LocalPos = BonePosUE[BoneIndex];
