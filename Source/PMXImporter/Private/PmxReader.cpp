@@ -2,7 +2,7 @@
 
 #include "PmxReader.h"
 #include "PmxStructs.h"
-#include "HAL/PlatformFilemanager.h"
+#include "HAL/PlatformFileManager.h"
 #include "Misc/FileHelper.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPmxReader, Log, All);
