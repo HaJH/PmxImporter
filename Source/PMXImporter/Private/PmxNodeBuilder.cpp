@@ -79,6 +79,7 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 		const FVector P(static_cast<double>(B.Position.X), static_cast<double>(B.Position.Y), static_cast<double>(B.Position.Z));
 		BonePosUE[i] = PMXBoneToUE.TransformPosition(P);
 	}
+	const TArray<FQuat> BoneRotUE = FPmxUtils::ComputeBoneWorldRotations(PmxModel.Bones);
 
 	// We will use the created Joint Root as the skeleton root
 	const FString JointRootUid = RootJointUid;
@@ -116,7 +117,7 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 
 	// Build unique bone names array (resolves duplicate names)
 	// This must match the names used in PmxTranslator's JointNames array
-	TArray<FString> UniqueBoneNames = FPmxUtils::BuildUniqueBoneNames(PmxModel);
+	TArray<FString> UniqueBoneNames = FPmxUtils::BuildUniqueBoneNames(PmxModel.Bones);
 
 	// Two-pass bone creation to handle forward references in ParentBoneIndex
 	// Pass 1: Create all joint nodes first
@@ -131,11 +132,14 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 
 		JointNode->InitializeNode(JointUid, *BoneName, ContainerType::TranslatedScene);
 
-		// Set local transform (bone position relative to parent, in UE space)
+		// Set local transform (bone position and rotation relative to parent, in UE space)
 		FVector LocalPos = BonePosUE[BoneIndex];
+		FQuat LocalRot = BoneRotUE[BoneIndex];
 		if (Bone.ParentBoneIndex >= 0 && Bone.ParentBoneIndex < PmxModel.Bones.Num())
 		{
-			LocalPos -= BonePosUE[Bone.ParentBoneIndex];
+			const FQuat& ParentRot = BoneRotUE[Bone.ParentBoneIndex];
+			LocalPos = ParentRot.UnrotateVector(LocalPos - BonePosUE[Bone.ParentBoneIndex]);
+			LocalRot = (ParentRot.Inverse() * LocalRot).GetNormalized();
 		}
 		// Safety clamp for abnormal bone offsets to avoid bones flying far away due to bad data/flags
 		bool bInvalid = (!FMath::IsFinite(LocalPos.X) || !FMath::IsFinite(LocalPos.Y) || !FMath::IsFinite(LocalPos.Z));
@@ -150,8 +154,7 @@ FString FPmxNodeBuilder::CreateBoneHierarchy(const FPmxModel& PmxModel, UInterch
 			UE_LOG(LogPMXImporter, Warning, TEXT("PMX Translator: Abnormal local bone offset clamped for bone '%s' (Index %d)."), *BoneName, BoneIndex);
 			LocalPos = FVector::ZeroVector;
 		}
-		FTransform LocalTransform = FTransform::Identity;
-		LocalTransform.SetLocation(LocalPos);
+		const FTransform LocalTransform(LocalRot, LocalPos);
 		JointNode->SetCustomLocalTransform(&BaseNodeContainer, LocalTransform);
 
 		BaseNodeContainer.AddNode(JointNode);

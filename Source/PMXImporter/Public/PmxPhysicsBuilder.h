@@ -47,6 +47,8 @@ private:
 	 * @param RB			The PMX rigid body data
 	 * @param RBIndex		Index of this rigid body in the RigidBodies array
 	 * @param Bone			The associated PMX bone
+	 * @param SkeletonBoneName	The associated bone's name in the skeleton
+	 * @param BoneWorldRotation	The associated bone's rest rotation in UE component space
 	 * @param RefSkel		The reference skeleton for bone lookup
 	 * @param PhysicsData	The full physics cache (for options)
 	 * @return The created BodySetup, or nullptr on failure
@@ -56,6 +58,8 @@ private:
 		const FPmxRigidBody& RB,
 		int32 RBIndex,
 		const FPmxBone& Bone,
+		const FString& SkeletonBoneName,
+		const FQuat& BoneWorldRotation,
 		const FReferenceSkeleton& RefSkel,
 		const FPmxPhysicsCache& PhysicsData
 	);
@@ -67,6 +71,8 @@ private:
 	 * @param Joint			The PMX joint data
 	 * @param RigidBodies	Array of all rigid bodies (for index lookup)
 	 * @param Bones			Array of all bones (for bone name lookup)
+	 * @param SkeletonBoneNames	Names of all bones in the skeleton
+	 * @param BoneWorldRotations	Rest rotations of all bones in UE component space
 	 * @param PhysicsData	The full physics cache (for options)
 	 * @return The created Constraint, or nullptr on failure
 	 */
@@ -75,6 +81,8 @@ private:
 		const FPmxJoint& Joint,
 		const TArray<FPmxRigidBody>& RigidBodies,
 		const TArray<FPmxBone>& Bones,
+		const TArray<FString>& SkeletonBoneNames,
+		const TArray<FQuat>& BoneWorldRotations,
 		const FPmxPhysicsCache& PhysicsData
 	);
 
@@ -87,13 +95,13 @@ private:
 	 * Convert PMX RigidBody position to bone-local offset.
 	 * PMX stores world coordinates, UE BodySetup needs bone-local.
 	 */
-	static FVector GetBodyLocalPosition(const FPmxRigidBody& RB, const FPmxBone& Bone, float Scale);
+	static FVector GetBodyLocalPosition(const FPmxRigidBody& RB, const FPmxBone& Bone, const FQuat& BoneWorldRotation, float Scale);
 
 	/**
-	 * Convert PMX RigidBody rotation to UE rotation.
+	 * Convert PMX RigidBody rotation to bone-local UE rotation.
 	 * Handles coordinate system transformation.
 	 */
-	static FRotator GetBodyLocalRotation(const FPmxRigidBody& RB);
+	static FRotator GetBodyLocalRotation(const FPmxRigidBody& RB, const FQuat& BoneWorldRotation);
 
 	// Coordinate transformation helpers
 	static FVector ConvertVectorPmxToUE(const FVector3f& PmxVector, float Scale);

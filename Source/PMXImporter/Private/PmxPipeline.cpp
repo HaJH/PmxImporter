@@ -4,6 +4,7 @@
 #include "LogPMXImporter.h"
 #include "PmxPhysicsBuilder.h"
 #include "PmxStructs.h"
+#include "PmxUtils.h"
 
 #include "InterchangeSourceData.h"
 #include "Nodes/InterchangeBaseNodeContainer.h"
@@ -12,6 +13,7 @@
 #include "InterchangeSkeletalMeshLodDataNode.h"
 #include "Types/InterchangeLODMeshData.h"
 #include "InterchangeMeshNode.h"
+#include "InterchangeJointNode.h"
 #include "InterchangePhysicsAssetFactoryNode.h"
 #include "InterchangeTexture2DFactoryNode.h"
 #include "InterchangeMaterialFactoryNode.h"
@@ -25,8 +27,6 @@
 #include "HAL/PlatformProcess.h"
 #include "Rendering/SkeletalMeshLODModel.h"
 #include "Rendering/SkeletalMeshModel.h"
-
-#include "SkeletonModifier.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(PmxPipeline)
 
@@ -87,85 +87,6 @@ bool UPmxPipeline::CanExecuteOnAnyThread(EInterchangePipelineTask PipelineTask)
 	return true;
 }
 
-void UPmxPipeline::RenameLRBones(USkeletalMesh* SkeletalMesh) const
-{
-	if (!bRenameLRBones)
-	{
-		return;
-	}
-
-	USkeleton* Skeleton = SkeletalMesh->GetSkeleton();
-	if (!Skeleton)
-	{
-		return;
-	}
-
-	USkeletonModifier* SkeletonModifier = NewObject<USkeletonModifier>();
-	SkeletonModifier->SetSkeletalMesh(SkeletalMesh);
-
-	const TArray<FMeshBoneInfo>& BoneInfoArray = SkeletalMesh->GetRefSkeleton().GetRefBoneInfo();
-
-	bool bChanged = false;
-	for (const FMeshBoneInfo& BoneInfo : BoneInfoArray)
-	{
-		if (BoneInfo.Name.ToString().StartsWith(TEXT("左")))
-		{
-			SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_L")));
-			bChanged = true;
-		}
-		else if (BoneInfo.Name.ToString().StartsWith(TEXT("右")))
-		{
-			SkeletonModifier->RenameBone(BoneInfo.Name, FName(BoneInfo.Name.ToString().RightChop(1) + TEXT("_R")));
-			bChanged = true;
-		}
-	}
-
-	if (!bChanged)
-	{
-		return;
-	}
-
-	SkeletalMesh->MarkPackageDirty();
-	Skeleton->MarkPackageDirty();
-	SkeletonModifier->CommitSkeletonToSkeletalMesh();
-
-	// After rename, the Skeleton still holds the original 左/右 bones as orphans.
-	// Collect bones that remain in the Skeleton but are no longer referenced by
-	// the SkeletalMesh, keep any parent of a retained bone, and remove the rest.
-	const FReferenceSkeleton& RefSkeleton = Skeleton->GetReferenceSkeleton();
-	const FReferenceSkeleton& MeshRefSkeleton = SkeletalMesh->GetRefSkeleton();
-
-	TArray<FName> OrphanedBones;
-	OrphanedBones.Reserve(RefSkeleton.GetRawBoneNum());
-	for (int32 BoneIndex = 0; BoneIndex < RefSkeleton.GetRawBoneNum(); ++BoneIndex)
-	{
-		OrphanedBones.Add(RefSkeleton.GetBoneName(BoneIndex));
-	}
-
-	for (int32 BoneIndex = 0; BoneIndex < MeshRefSkeleton.GetRawBoneNum() && OrphanedBones.Num() > 0; ++BoneIndex)
-	{
-		OrphanedBones.Remove(MeshRefSkeleton.GetBoneName(BoneIndex));
-	}
-
-	for (int32 BoneIndex = RefSkeleton.GetRawBoneNum() - 1; BoneIndex >= 0; --BoneIndex)
-	{
-		const FName CurrBoneName = RefSkeleton.GetBoneName(BoneIndex);
-		if (!OrphanedBones.Contains(CurrBoneName))
-		{
-			const int32 ParentIndex = RefSkeleton.GetParentIndex(BoneIndex);
-			if (ParentIndex != INDEX_NONE)
-			{
-				OrphanedBones.Remove(RefSkeleton.GetBoneName(ParentIndex));
-			}
-		}
-	}
-
-	if (OrphanedBones.Num() > 0)
-	{
-		Skeleton->RemoveBonesFromSkeleton(OrphanedBones, true);
-	}
-}
-
 void UPmxPipeline::ExecutePipeline(UInterchangeBaseNodeContainer* BaseNodeContainer, const TArray<UInterchangeSourceData*>& SourceDatas, const FString& ContentBasePath)
 {
 	if (!BaseNodeContainer)
@@ -184,6 +105,9 @@ void UPmxPipeline::ExecutePipeline(UInterchangeBaseNodeContainer* BaseNodeContai
 	// The Translator may have already created the cache with default values,
 	// so we need to update it here with the user's settings from the import dialog
 	UpdatePhysicsCacheOptions();
+
+	// Bone names must be final before the skeleton is created
+	ApplyBoneNameOptions(BaseNodeContainer);
 
 	// Create texture and material factory nodes
 	CreateTextureFactoryNodes(BaseNodeContainer);
@@ -263,6 +187,42 @@ void UPmxPipeline::StoreOptionsToSourceNode(UInterchangeBaseNodeContainer* BaseN
 		Scale, PhysicsShapeScale, PhysicsSphereScale, PhysicsBoxScale, PhysicsCapsuleScale);
 }
 
+void UPmxPipeline::ApplyBoneNameOptions(UInterchangeBaseNodeContainer* BaseNodeContainer) const
+{
+	// Translate() runs before the import dialog, so joint nodes and the cached model still have source names.
+	// Renaming after import would need USkeletonModifier, which prompts because the skeleton asset already exists.
+	const TSharedPtr<FPmxModel>* FoundModel = UPmxTranslator::MeshPayloadCache.Find(TEXT("PMX_GEOMETRY"));
+	if (!FoundModel || !FoundModel->IsValid())
+	{
+		return;
+	}
+
+	FPmxModel& Model = **FoundModel;
+	Model.bRenameLRBones = bRenameLRBones;
+	if (!bRenameLRBones)
+	{
+		return;
+	}
+
+	const TArray<FString> SourceNames = FPmxUtils::BuildUniqueBoneNames(Model.Bones);
+	const TArray<FString> RenamedNames = FPmxUtils::BuildUniqueBoneNames(Model.Bones, true);
+	TMap<FString, FString> RenamedBySource;
+	RenamedBySource.Reserve(SourceNames.Num());
+	for (int32 BoneIndex = 0; BoneIndex < SourceNames.Num(); ++BoneIndex)
+	{
+		RenamedBySource.Add(SourceNames[BoneIndex], RenamedNames[BoneIndex]);
+	}
+
+	BaseNodeContainer->IterateNodesOfType<UInterchangeJointNode>(
+		[&RenamedBySource](const FString& NodeUid, UInterchangeJointNode* JointNode)
+		{
+			if (const FString* RenamedName = RenamedBySource.Find(JointNode->GetDisplayLabel()))
+			{
+				JointNode->SetDisplayLabel(*RenamedName);
+			}
+		});
+}
+
 void UPmxPipeline::UpdatePhysicsCacheOptions() const
 {
 	// Update all physics caches with current pipeline options
@@ -275,6 +235,8 @@ void UPmxPipeline::UpdatePhysicsCacheOptions() const
 		if (CachePair.Value.IsValid())
 		{
 			FPmxPhysicsCache& Cache = *CachePair.Value;
+
+			Cache.bRenameLRBones = bRenameLRBones;
 
 			// Update scale options
 			Cache.Scale = Scale;
@@ -715,12 +677,6 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 		return;
 	}
 
-	if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(CreatedAsset))
-	{
-		RenameLRBones(SkeletalMesh);
-		return;
-	}
-
 	// Handle Physics Asset creation
 	if (UPhysicsAsset* PhysicsAsset = Cast<UPhysicsAsset>(CreatedAsset))
 	{
@@ -803,33 +759,6 @@ void UPmxPipeline::ExecutePostImportPipeline(const UInterchangeBaseNodeContainer
 		else
 		{
 			UE_LOG(LogPMXImporter, Log, TEXT("UPmxPipeline: No PMX physics cache found for '%s'"), *MeshName);
-		}
-
-
-		if (bRenameLRBones)
-		{
-			bool bChanged = false;
-			for (USkeletalBodySetup* BodySetup : PhysicsAsset->SkeletalBodySetups)
-			{
-				if (BodySetup->BoneName.ToString().StartsWith(TEXT("左")))
-				{
-					BodySetup->BoneName = FName(BodySetup->BoneName.ToString().RightChop(1) + TEXT("_L"));
-					bChanged = true;
-				}
-				else if (BodySetup->BoneName.ToString().StartsWith(TEXT("右")))
-				{
-					BodySetup->BoneName = FName(BodySetup->BoneName.ToString().RightChop(1) + TEXT("_R"));
-					bChanged = true;
-				}
-			}
-
-			if (bChanged)
-			{
-				// Force the physics asset to re-initialize constraints/bodies
-				PhysicsAsset->UpdateBodySetupIndexMap();
-				PhysicsAsset->UpdateBoundsBodiesArray();
-				PhysicsAsset->MarkPackageDirty();
-			}
 		}
 
 		return;

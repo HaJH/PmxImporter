@@ -749,7 +749,7 @@ TOptional<UE::Interchange::FMeshPayloadData> UPmxTranslator::GetMeshPayloadData(
     // SkeletalMesh has Root at index 0, then PMX bones at indices 1..N
     // Skin weights must use these adjusted indices
     // IMPORTANT: Use BuildUniqueBoneNames to ensure consistency with PmxNodeBuilder
-    TArray<FString> UniqueBoneNames = FPmxUtils::BuildUniqueBoneNames(Model);
+    TArray<FString> UniqueBoneNames = FPmxUtils::BuildUniqueBoneNames(Model.Bones, Model.bRenameLRBones);
 
     Data.JointNames.Reset(UniqueBoneNames.Num() + 1);  // +1 for Root
     Data.JointNames.Reserve(UniqueBoneNames.Num() + 1);

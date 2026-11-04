@@ -63,12 +63,29 @@ public:
 	 * IMPORTANT: Use this function in both PmxNodeBuilder and PmxTranslator to ensure
 	 * bone names are consistent between Interchange nodes and JointNames array.
 	 *
-	 * @param Model The PMX model
+	 * @param Bones The PMX bones
+	 * @param bRenameLR Convert 左/右 name prefixes to _L/_R suffixes (左腕 -> 腕_L)
 	 * @return Array of unique bone names (preserves original order, matches bone indices)
 	 *
 	 * Examples:
 	 *   Input bones: ["左腕", "右腕", "左腕", "センター"]
 	 *   Output: ["左腕", "右腕", "左腕_1", "センター"]
 	 */
-	static TArray<FString> BuildUniqueBoneNames(const FPmxModel& Model);
+	static TArray<FString> BuildUniqueBoneNames(const TArray<FPmxBone>& Bones, bool bRenameLR = false);
+
+	/**
+	 * Compute each bone's rest rotation in UE component space (same space as the converted bone positions).
+	 *
+	 * Matches a Blender FBX export of the model imported with mmd_tools, using primary bone axis +X and
+	 * secondary bone axis -Z. Local +X points from the bone's head to its tail. Roll comes from the PMX
+	 * local axes, mmd_tools' automatic axes for arm and finger bones, or else Blender's default roll.
+	 * Bones without a usable tail take it from their IK link or fixed axis, and otherwise point up.
+	 *
+	 * IMPORTANT: Anything authored relative to a bone (joint transforms, physics bodies, constraint frames)
+	 * must use these rotations so that it stays consistent with the imported skeleton.
+	 *
+	 * @param Bones The PMX bones
+	 * @return Normalized rotations, indexed by PMX bone index
+	 */
+	static TArray<FQuat> ComputeBoneWorldRotations(const TArray<FPmxBone>& Bones);
 };
