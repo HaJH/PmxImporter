@@ -3,6 +3,7 @@
 #include "PmxPhysicsBuilder.h"
 #include "PmxTranslator.h"
 #include "PmxStructs.h"
+#include "PmxUtils.h"
 #include "LogPMXImporter.h"
 
 #include "PhysicsEngine/PhysicsAsset.h"
@@ -51,6 +52,10 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 	// Map from PMX RigidBody index to created BodySetup (for constraint creation)
 	TMap<int32, USkeletalBodySetup*> RigidBodyToBodySetup;
 
+	// Body and constraint frames are authored in bone space, so they need the skeleton's bone rotations
+	const TArray<FQuat> BoneWorldRotations = FPmxUtils::ComputeBoneWorldRotations(PhysicsData.Bones);
+	const TArray<FString> SkeletonBoneNames = FPmxUtils::BuildUniqueBoneNames(PhysicsData.Bones, PhysicsData.bRenameLRBones);
+
 	// Create BodySetups for each RigidBody
 	int32 CreatedBodies = 0;
 	for (int32 RBIndex = 0; RBIndex < PhysicsData.RigidBodies.Num(); ++RBIndex)
@@ -69,7 +74,7 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 		const FPmxBone& Bone = PhysicsData.Bones[RB.RelatedBoneIndex];
 
 		USkeletalBodySetup* BodySetup = CreateBodySetup(
-			PhysicsAsset, RB, RBIndex, Bone, RefSkel, PhysicsData);
+			PhysicsAsset, RB, RBIndex, Bone, SkeletonBoneNames[RB.RelatedBoneIndex], BoneWorldRotations[RB.RelatedBoneIndex], RefSkel, PhysicsData);
 
 		if (BodySetup)
 		{
@@ -103,7 +108,7 @@ bool FPmxPhysicsBuilder::BuildPhysicsAsset(
 		}
 
 		UPhysicsConstraintTemplate* Constraint = CreateConstraint(
-			PhysicsAsset, Joint, PhysicsData.RigidBodies, PhysicsData.Bones, PhysicsData);
+			PhysicsAsset, Joint, PhysicsData.RigidBodies, PhysicsData.Bones, SkeletonBoneNames, BoneWorldRotations, PhysicsData);
 
 		if (Constraint)
 		{
@@ -263,11 +268,13 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 	const FPmxRigidBody& RB,
 	int32 RBIndex,
 	const FPmxBone& Bone,
+	const FString& SkeletonBoneName,
+	const FQuat& BoneWorldRotation,
 	const FReferenceSkeleton& RefSkel,
 	const FPmxPhysicsCache& PhysicsData)
 {
 	// Find bone in skeleton by PMX bone name
-	const FName PmxBoneName = FName(*Bone.Name);
+	const FName PmxBoneName = FName(*SkeletonBoneName);
 	int32 BoneIndex = RefSkel.FindBoneIndex(PmxBoneName);
 	FName ActualBoneName = PmxBoneName;
 
@@ -277,11 +284,11 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 	{
 		for (int32 i = 0; i < RefSkel.GetNum(); ++i)
 		{
-			const FName SkeletonBoneName = RefSkel.GetBoneName(i);
-			if (SkeletonBoneName.ToString().Equals(Bone.Name, ESearchCase::CaseSensitive))
+			const FName RefBoneName = RefSkel.GetBoneName(i);
+			if (RefBoneName.ToString().Equals(SkeletonBoneName, ESearchCase::CaseSensitive))
 			{
 				BoneIndex = i;
-				ActualBoneName = SkeletonBoneName; // Use the exact FName from skeleton
+				ActualBoneName = RefBoneName; // Use the exact FName from skeleton
 				break;
 			}
 		}
@@ -291,7 +298,7 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 	{
 		UE_LOG(LogPMXImporter, Log,
 			TEXT("CreateBodySetup: Bone '%s' not found in skeleton for RigidBody '%s'"),
-			*Bone.Name, *RB.Name);
+			*SkeletonBoneName, *RB.Name);
 		return nullptr;
 	}
 
@@ -406,8 +413,8 @@ USkeletalBodySetup* FPmxPhysicsBuilder::CreateBodySetup(
 	SetupCollisionFiltering(BodySetup, RB);
 
 	// Get body local transform
-	const FVector LocalPos = GetBodyLocalPosition(RB, Bone, PhysicsData.Scale);
-	const FRotator LocalRot = GetBodyLocalRotation(RB);
+	const FVector LocalPos = GetBodyLocalPosition(RB, Bone, BoneWorldRotation, PhysicsData.Scale);
+	const FRotator LocalRot = GetBodyLocalRotation(RB, BoneWorldRotation);
 
 	// Create shape based on type
 	FKAggregateGeom& AggGeom = BodySetup->AggGeom;
@@ -463,6 +470,8 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 	const FPmxJoint& Joint,
 	const TArray<FPmxRigidBody>& RigidBodies,
 	const TArray<FPmxBone>& Bones,
+	const TArray<FString>& SkeletonBoneNames,
+	const TArray<FQuat>& BoneWorldRotations,
 	const FPmxPhysicsCache& PhysicsData)
 {
 	// Validate indices
@@ -490,8 +499,8 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 
 	// Find the actual bone names from existing BodySetups
 	// This ensures we use the exact same FName that was registered in the physics asset
-	const FString& PmxBoneNameA = Bones[RBA.RelatedBoneIndex].Name;
-	const FString& PmxBoneNameB = Bones[RBB.RelatedBoneIndex].Name;
+	const FString& PmxBoneNameA = SkeletonBoneNames[RBA.RelatedBoneIndex];
+	const FString& PmxBoneNameB = SkeletonBoneNames[RBB.RelatedBoneIndex];
 
 	FName ActualBoneNameA = NAME_None;
 	FName ActualBoneNameB = NAME_None;
@@ -752,8 +761,10 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 	const FVector BonePosB = ConvertVectorPmxToUE(BoneB.Position, PhysicsData.Scale);
 
 	// Calculate bone-local positions for each constraint frame
-	const FVector JointLocalPosA = JointWorldPos - BonePosA;
-	const FVector JointLocalPosB = JointWorldPos - BonePosB;
+	const FQuat& BoneRotA = BoneWorldRotations[RBA.RelatedBoneIndex];
+	const FQuat& BoneRotB = BoneWorldRotations[RBB.RelatedBoneIndex];
+	const FVector JointLocalPosA = BoneRotA.UnrotateVector(JointWorldPos - BonePosA);
+	const FVector JointLocalPosB = BoneRotB.UnrotateVector(JointWorldPos - BonePosB);
 
 	CI.SetRefPosition(EConstraintFrame::Frame1, JointLocalPosA);
 	CI.SetRefPosition(EConstraintFrame::Frame2, JointLocalPosB);
@@ -762,8 +773,8 @@ UPhysicsConstraintTemplate* FPmxPhysicsBuilder::CreateConstraint(
 	const FQuat JointQuat = JointRot.Quaternion().GetNormalized();
 	const FVector PriAxis = JointQuat.GetAxisX();
 	const FVector SecAxis = JointQuat.GetAxisY();
-	CI.SetRefOrientation(EConstraintFrame::Frame1, PriAxis, SecAxis);
-	CI.SetRefOrientation(EConstraintFrame::Frame2, PriAxis, SecAxis);
+	CI.SetRefOrientation(EConstraintFrame::Frame1, BoneRotA.UnrotateVector(PriAxis), BoneRotA.UnrotateVector(SecAxis));
+	CI.SetRefOrientation(EConstraintFrame::Frame2, BoneRotB.UnrotateVector(PriAxis), BoneRotB.UnrotateVector(SecAxis));
 
 	// CRITICAL: Sync DefaultProfile with ProfileInstance
 	// Without this, empty DefaultProfile values will overwrite ProfileInstance during Serialize
@@ -816,18 +827,19 @@ void FPmxPhysicsBuilder::SetupCapsuleShape(FKAggregateGeom& Geom, const FPmxRigi
 	Geom.SphylElems.Add(Capsule);
 }
 
-FVector FPmxPhysicsBuilder::GetBodyLocalPosition(const FPmxRigidBody& RB, const FPmxBone& Bone, float Scale)
+FVector FPmxPhysicsBuilder::GetBodyLocalPosition(const FPmxRigidBody& RB, const FPmxBone& Bone, const FQuat& BoneWorldRotation, float Scale)
 {
 	// PMX RigidBody.Position is in world coordinates
 	// UE BodySetup needs bone-local coordinates
 	const FVector WorldPos = ConvertVectorPmxToUE(RB.Position, Scale);
 	const FVector BonePos = ConvertVectorPmxToUE(Bone.Position, Scale);
-	return WorldPos - BonePos;
+	return BoneWorldRotation.UnrotateVector(WorldPos - BonePos);
 }
 
-FRotator FPmxPhysicsBuilder::GetBodyLocalRotation(const FPmxRigidBody& RB)
+FRotator FPmxPhysicsBuilder::GetBodyLocalRotation(const FPmxRigidBody& RB, const FQuat& BoneWorldRotation)
 {
-	return ConvertRotationPmxToUE(RB.Rotation);
+	// PMX RigidBody.Rotation is in world coordinates as well
+	return (BoneWorldRotation.Inverse() * ConvertRotationPmxToUE(RB.Rotation).Quaternion()).GetNormalized().Rotator();
 }
 
 FVector FPmxPhysicsBuilder::ConvertVectorPmxToUE(const FVector3f& PmxVector, float Scale)

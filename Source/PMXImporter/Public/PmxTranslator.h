@@ -158,6 +158,7 @@ struct FPmxPhysicsCache
     TArray<FPmxRigidBody> RigidBodies;
     TArray<FPmxJoint> Joints;
     TArray<FPmxBone> Bones;
+    bool bRenameLRBones = false;
     FString SourceFilePath;
     float Scale = 8.0f;
     EPmxPhysicsType2Handling Type2Mode = EPmxPhysicsType2Handling::ConvertToKinematic;

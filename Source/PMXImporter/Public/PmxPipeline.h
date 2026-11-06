@@ -285,6 +285,9 @@ private:
 	/** Update physics cache with current pipeline options (called after Translator has created cache) */
 	void UpdatePhysicsCacheOptions() const;
 
+	/** Apply the bone rename option to the joint nodes and the mesh payload before any asset is created. */
+	void ApplyBoneNameOptions(UInterchangeBaseNodeContainer* BaseNodeContainer) const;
+
 	/** Create factory nodes for textures */
 	void CreateTextureFactoryNodes(UInterchangeBaseNodeContainer* BaseNodeContainer) const;
 
@@ -298,7 +301,6 @@ private:
 	void BuildPmxPhysicsAsset(UPhysicsAsset* PhysicsAsset, USkeletalMesh* SkeletalMesh, const FPmxPhysicsCache& PhysicsData) const;
 
 	/** Rename chiral bones with _L _R Suffix */
-	void RenameLRBones(USkeletalMesh* SkeletalMesh) const;
 
 	/** Cached base node container for post-import access */
 	UPROPERTY(Transient)

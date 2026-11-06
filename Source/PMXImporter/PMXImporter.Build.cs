@@ -38,8 +38,6 @@ public class PMXImporter : ModuleRules
             "AssetRegistry",
             // For image resizing/utilities used by the translator when handling texture payloads
             "ImageCore",
-            // For renaming bones
-            "SkeletalMeshModifiers",
         });
 
         PublicIncludePaths.AddRange(new string[]

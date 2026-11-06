@@ -293,4 +293,7 @@ struct FPmxModel
 	TArray<FPmxRigidBody> RigidBodies;
 	TArray<FPmxJoint> Joints;
 	TArray<FPmxSoftBody> SoftBodies; // PMX 2.1 feature
+
+	// Import option rather than file data: skeleton bone names use the _L/_R convention
+	bool bRenameLRBones = false;
 };
