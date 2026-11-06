@@ -2,6 +2,7 @@
 
 #include "PmxUtils.h"
 #include "LogPMXImporter.h"
+#include "InterchangeHelper.h"
 
 FString FPmxUtils::SanitizeMorphName(const FString& InName, int32 FallbackIndex)
 {
@@ -187,7 +188,9 @@ TArray<FString> FPmxUtils::BuildUniqueBoneNames(const TArray<FPmxBone>& Bones, b
 		{
 			BaseName = BaseName.RightChop(1) + TEXT("_R");
 		}
-		return BaseName;
+		// SetDisplayLabel sanitizes joint labels, so apply the same rule here to keep
+		// joint nodes, the mesh payload and physics bodies on the skeleton's actual names
+		return UE::Interchange::MakeSanitizedName(BaseName);
 	};
 
 	// Track how many times each name has been used

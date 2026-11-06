@@ -63,6 +63,9 @@ public:
 	 * IMPORTANT: Use this function in both PmxNodeBuilder and PmxTranslator to ensure
 	 * bone names are consistent between Interchange nodes and JointNames array.
 	 *
+	 * Names are sanitized the way UInterchangeBaseNode::SetDisplayLabel does ("前髪 1" -> "前髪_1"),
+	 * so they match the bone names in the imported skeleton.
+	 *
 	 * @param Bones The PMX bones
 	 * @param bRenameLR Convert 左/右 name prefixes to _L/_R suffixes (左腕 -> 腕_L)
 	 * @return Array of unique bone names (preserves original order, matches bone indices)
