@@ -1290,7 +1290,9 @@ void UPmxTranslator::ImportTextures(const FPmxModel& PmxModel, const FString& Pm
             FPaths::CollapseRelativeDirectories(AbsPath);
 
             // Check if this is a network path (Unix-style from FPaths or original UNC)
-            const bool bIsNetworkPath = AbsPath.StartsWith(TEXT("\\\\")) ||
+            // UE keeps UNC paths as //server/share, which MakeStandardFilename below would collapse to /server/share
+            const bool bHasDoubleSlashPrefix = AbsPath.StartsWith(TEXT("//"));
+            const bool bIsNetworkPath = AbsPath.StartsWith(TEXT("\\\\")) || bHasDoubleSlashPrefix ||
                                         (AbsPath.Len() > 2 && AbsPath[0] == TEXT('/') &&
                                          (FChar::IsDigit(AbsPath[1]) || FChar::IsAlpha(AbsPath[1])));
 
@@ -1298,8 +1300,8 @@ void UPmxTranslator::ImportTextures(const FPmxModel& PmxModel, const FString& Pm
             // FPaths functions may convert \\192.168.0.10\path to /192.168.0.10/path
             if (bIsNetworkPath && AbsPath.StartsWith(TEXT("/")))
             {
-                // Convert /IP/path to \\IP\path
-                AbsPath = TEXT("\\\\") + AbsPath.Mid(1);
+                // Convert //server/path or /server/path to \\server\path
+                AbsPath = TEXT("\\\\") + AbsPath.Mid(bHasDoubleSlashPrefix ? 2 : 1);
                 AbsPath.ReplaceInline(TEXT("/"), TEXT("\\"));
                 UE_LOG(LogPMXImporter, Verbose, TEXT("Converted Unix-style network path to UNC: %s"), *AbsPath);
             }

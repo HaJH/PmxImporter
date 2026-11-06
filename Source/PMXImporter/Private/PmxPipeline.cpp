@@ -382,6 +382,9 @@ void UPmxPipeline::CreateTextureFactoryNodes(UInterchangeBaseNodeContainer* Base
             FactoryNode->SetCustomSRGB(bSRGB, false);
         }
 
+        // MMD textures are often non-power-of-two, which the factory rejects unless allowed
+        FactoryNode->SetCustomAllowNonPowerOfTwo(true);
+
         // Mipmap settings (pipeline option)
         // Detect toon/small textures to prevent mipmap generation failure
         FString TextureDisplayLabel = TextureNode->GetDisplayLabel();
